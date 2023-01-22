@@ -1,0 +1,112 @@
+--- ./examples/helloworld/Makefile.am	2009-03-02 23:39:50.000000000 -0200
++++ ./examples/helloworld/Makefile.am	2012-06-05 13:20:43.681914093 -0300
+@@ -26,8 +26,8 @@
+ circlegen_LDADD = \
+ 	$(top_builddir)/src/kml/base/libkmlbase.la \
+ 	$(top_builddir)/src/kml/dom/libkmldom.la \
+-	$(top_builddir)/src/kml/engine/libkmlengine.la \
+-	$(top_builddir)/src/kml/convenience/libkmlconvenience.la
++	$(top_builddir)/src/kml/convenience/libkmlconvenience.la \
++	$(top_builddir)/src/kml/engine/libkmlengine.la
+ 
+ checklinks_SOURCES = checklinks.cc
+ checklinks_LDADD = \
+@@ -75,8 +75,8 @@
+ 
+ hellokmz_SOURCES = hellokmz.cc
+ hellokmz_LDADD = \
+-	$(top_builddir)/src/kml/dom/libkmldom.la \
+ 	$(top_builddir)/src/kml/engine/libkmlengine.la \
++	$(top_builddir)/src/kml/dom/libkmldom.la \
+ 	$(top_builddir)/src/kml/base/libkmlbase.la
+ 
+ helloregion_SOURCES = helloregion.cc
+@@ -102,8 +102,8 @@
+ 
+ prettykml_SOURCES = prettykml.cc
+ prettykml_LDADD = \
+-	$(top_builddir)/src/kml/dom/libkmldom.la \
+ 	$(top_builddir)/src/kml/engine/libkmlengine.la \
++	$(top_builddir)/src/kml/dom/libkmldom.la \
+ 	$(top_builddir)/src/kml/base/libkmlbase.la
+ 
+ printgeometry_SOURCES = printgeometry.cc
+--- ./examples/helloworld/Makefile.in	2012-06-01 00:03:17.000000000 -0300
++++ ./examples/helloworld/Makefile.in	2012-06-05 13:20:43.681914093 -0300
+@@ -347,8 +347,8 @@
+ circlegen_LDADD = \
+ 	$(top_builddir)/src/kml/base/libkmlbase.la \
+ 	$(top_builddir)/src/kml/dom/libkmldom.la \
+-	$(top_builddir)/src/kml/engine/libkmlengine.la \
+-	$(top_builddir)/src/kml/convenience/libkmlconvenience.la
++	$(top_builddir)/src/kml/convenience/libkmlconvenience.la \
++	$(top_builddir)/src/kml/engine/libkmlengine.la
+ 
+ checklinks_SOURCES = checklinks.cc
+ checklinks_LDADD = \
+@@ -396,8 +396,8 @@
+ 
+ hellokmz_SOURCES = hellokmz.cc
+ hellokmz_LDADD = \
+-	$(top_builddir)/src/kml/dom/libkmldom.la \
+ 	$(top_builddir)/src/kml/engine/libkmlengine.la \
++	$(top_builddir)/src/kml/dom/libkmldom.la \
+ 	$(top_builddir)/src/kml/base/libkmlbase.la
+ 
+ helloregion_SOURCES = helloregion.cc
+@@ -423,8 +423,8 @@
+ 
+ prettykml_SOURCES = prettykml.cc
+ prettykml_LDADD = \
+-	$(top_builddir)/src/kml/dom/libkmldom.la \
+ 	$(top_builddir)/src/kml/engine/libkmlengine.la \
++	$(top_builddir)/src/kml/dom/libkmldom.la \
+ 	$(top_builddir)/src/kml/base/libkmlbase.la
+ 
+ printgeometry_SOURCES = printgeometry.cc
+--- ./examples/regionator/Makefile.am	2010-04-06 17:25:58.000000000 -0300
++++ ./examples/regionator/Makefile.am	2012-06-05 13:20:43.681914093 -0300
+@@ -12,15 +12,15 @@
+ csvregionator_LDADD = \
+ 	$(top_builddir)/src/kml/base/libkmlbase.la \
+ 	$(top_builddir)/src/kml/dom/libkmldom.la \
+-	$(top_builddir)/src/kml/engine/libkmlengine.la \
+ 	$(top_builddir)/src/kml/regionator/libkmlregionator.la \
+-	$(top_builddir)/src/kml/convenience/libkmlconvenience.la
++	$(top_builddir)/src/kml/convenience/libkmlconvenience.la \
++	$(top_builddir)/src/kml/engine/libkmlengine.la
+ 
+ kmlregionator_SOURCES = kmlregionator.cc
+ kmlregionator_LDADD = \
+ 	$(top_builddir)/src/kml/base/libkmlbase.la \
+ 	$(top_builddir)/src/kml/dom/libkmldom.la \
+-	$(top_builddir)/src/kml/engine/libkmlengine.la \
+ 	$(top_builddir)/src/kml/regionator/libkmlregionator.la \
+-	$(top_builddir)/src/kml/convenience/libkmlconvenience.la
++	$(top_builddir)/src/kml/convenience/libkmlconvenience.la \
++	$(top_builddir)/src/kml/engine/libkmlengine.la
+ 
+--- ./examples/regionator/Makefile.in	2012-06-01 00:03:17.000000000 -0300
++++ ./examples/regionator/Makefile.in	2012-06-05 13:26:48.054296517 -0300
+@@ -226,17 +226,17 @@
+ csvregionator_LDADD = \
+ 	$(top_builddir)/src/kml/base/libkmlbase.la \
+ 	$(top_builddir)/src/kml/dom/libkmldom.la \
+-	$(top_builddir)/src/kml/engine/libkmlengine.la \
+ 	$(top_builddir)/src/kml/regionator/libkmlregionator.la \
+-	$(top_builddir)/src/kml/convenience/libkmlconvenience.la
++	$(top_builddir)/src/kml/convenience/libkmlconvenience.la \
++	$(top_builddir)/src/kml/engine/libkmlengine.la
+ 
+ kmlregionator_SOURCES = kmlregionator.cc
+ kmlregionator_LDADD = \
+ 	$(top_builddir)/src/kml/base/libkmlbase.la \
+ 	$(top_builddir)/src/kml/dom/libkmldom.la \
+-	$(top_builddir)/src/kml/engine/libkmlengine.la \
+ 	$(top_builddir)/src/kml/regionator/libkmlregionator.la \
+-	$(top_builddir)/src/kml/convenience/libkmlconvenience.la
++	$(top_builddir)/src/kml/convenience/libkmlconvenience.la \
++	$(top_builddir)/src/kml/engine/libkmlengine.la
+ 
+ all: all-am
+ 

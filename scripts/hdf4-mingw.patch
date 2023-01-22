@@ -1,0 +1,86 @@
+diff -Nauwr configure HDF4.2r2-mingw/configure
+--- configure	2007-09-10 21:23:49.000000000 +0000
++++ configure	2007-12-13 22:21:01.000000000 +0000
+@@ -9833,6 +9833,7 @@
+   *-mac-*)              BAR="mac"         ;;
+   *-apple*)             BAR="apple"       ;;
+   i686-pc-cygwin*)      BAR="linux"       ;;
++  i686-pc-mingw*)       BAR="linux"       ;;
+   *)                    echo "*** unknown host $host!"; exit 1 ;;
+ esac
+ 
+diff -Nauwr configure.ac HDF4.2r2-mingw/configure.ac
+--- configure.ac	2007-09-06 22:15:36.000000000 +0000
++++ configure.ac	2007-12-13 22:21:02.000000000 +0000
+@@ -599,6 +599,7 @@
+   *-mac-*)              BAR="mac"         ;;
+   *-apple*)             BAR="apple"       ;;
+   i686-pc-cygwin*)      BAR="linux"       ;;
++  i686-pc-mingw*)       BAR="linux"       ;;
+   *)                    echo "*** unknown host $host!"; exit 1 ;;
+ esac
+ 
+diff -Nauwr hdf/src/hlimits.h HDF4.2r2-mingw/hdf/src/hlimits.h
+--- hdf/src/hlimits.h	2007-09-07 17:17:23.000000000 +0000
++++ hdf/src/hlimits.h	2007-12-13 22:21:03.000000000 +0000
+@@ -22,7 +22,8 @@
+ #ifndef _HLIMITS_H
+ #define _HLIMITS_H
+ 
+-#ifndef WIN32
++/* Mingw can use setvbus (at least it compiles) */
++#if !defined(WIN32) || defined(__MINGW32__)
+ #define HDsetvbuf(F,S,M,Z)	setvbuf(F,S,M,Z)
+ #endif
+ /**************************************************************************
+diff -Nauwr mfhdf/libsrc/local_nc.h HDF4.2r2-mingw/mfhdf/libsrc/local_nc.h
+--- mfhdf/libsrc/local_nc.h	2007-09-17 05:01:50.000000000 +0000
++++ mfhdf/libsrc/local_nc.h	2007-12-13 22:21:04.000000000 +0000
+@@ -22,7 +22,7 @@
+  *	netcdf library 'private' data structures, objects and interfaces
+  */
+ 
+-#if (defined macintosh) || (defined MPW) || (defined __MWERKS__)
++#if (defined macintosh) || (defined MPW) || (defined __MWERKS__) || (defined __MINGW32__)
+ #ifndef HDF
+ #define HDF  /* For Mac we need to define this, to avoid putting on compile line */
+ #endif
+@@ -61,8 +61,13 @@
+ #include      "::xdr:types.h"  /* "../xdr/types.h" */
+ #include      "::xdr:xdr.h"    /* "../xdr/xdr.h" */
+ #else /* !macintosh */
++#if (defined __MINGW32__) /* mingw also needs this but without :: or :*/
++#include      "../xdr/types.h"
++#include      "../xdr/xdr.h"
++#else /* !mingw */
+ #include      <types.h>  /* <types.h */
+ #include      <xdr.h>    /* <xdr.h> */
++#endif	/* mingw32 */
+ #endif /* !macintosh */
+ #endif /* NO_SYSTEM_XDR_INCLUDES */
+ 
+diff -Nauwr mfhdf/Makefile.am HDF4.2r2-mingw/mfhdf/Makefile.am
+--- mfhdf/Makefile.am	2005-01-09 20:54:36.000000000 +0000
++++ mfhdf/Makefile.am	2007-12-13 22:21:04.000000000 +0000
+@@ -1,5 +1,5 @@
+ if HDF_BUILD_FORTRAN
+-SUBDIRS=port fortran libsrc ncdump ncgen dumper hdfimport hdiff hrepack nctest
++SUBDIRS=port fortran libsrc ncdump dumper hdfimport hdiff hrepack nctest
+ else
+-SUBDIRS=port libsrc ncdump ncgen dumper hdfimport hdiff hrepack nctest
++SUBDIRS=port libsrc ncdump dumper hdfimport hdiff hrepack nctest
+ endif
+diff -Nauwr mfhdf/Makefile.in HDF4.2r2-mingw/mfhdf/Makefile.in
+--- mfhdf/Makefile.in	2007-05-14 22:04:51.000000000 +0000
++++ mfhdf/Makefile.in	2007-12-13 22:21:05.000000000 +0000
+@@ -173,8 +173,8 @@
+ target_alias = @target_alias@
+ top_builddir = @top_builddir@
+ top_srcdir = @top_srcdir@
+-@HDF_BUILD_FORTRAN_FALSE@SUBDIRS = port libsrc ncdump ncgen dumper hdfimport hdiff hrepack nctest
+-@HDF_BUILD_FORTRAN_TRUE@SUBDIRS = port fortran libsrc ncdump ncgen dumper hdfimport hdiff hrepack nctest
++@HDF_BUILD_FORTRAN_FALSE@SUBDIRS = port libsrc ncdump dumper hdfimport hdiff hrepack nctest
++@HDF_BUILD_FORTRAN_TRUE@SUBDIRS = port fortran libsrc ncdump dumper hdfimport hdiff hrepack nctest
+ all: all-recursive
+ 
+ .SUFFIXES:

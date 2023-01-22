@@ -1,0 +1,21 @@
+--- cwchar	2009-06-17 06:37:48 -0300
++++ cwchar	2011-04-11 13:24:43 -0300
+@@ -156,14 +156,18 @@
+   using ::mbsrtowcs;
+   using ::putwc;
+   using ::putwchar;
++#ifndef __STRICT_ANSI__
+   using ::swprintf;
++#endif
+   using ::swscanf;
+   using ::ungetwc;
+   using ::vfwprintf;
+ #if _GLIBCXX_HAVE_VFWSCANF
+   using ::vfwscanf;
+ #endif
++#ifndef __STRICT_ANSI__
+   using ::vswprintf;
++#endif
+ #if _GLIBCXX_HAVE_VSWSCANF
+   using ::vswscanf;
+ #endif

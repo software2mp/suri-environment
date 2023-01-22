@@ -1,0 +1,229 @@
+Index: frmts/fastv6/fastv6imagedataset.cpp
+===================================================================
+--- frmts/fastv6/fastv6imagedataset.cpp	(revision 25355)
++++ frmts/fastv6/fastv6imagedataset.cpp	(working copy)
+@@ -113,6 +113,12 @@
+      * Copies dataset's information.
+      */
+     static void CopyDatasetInfo(GDALDataset* poDestDS, GDALDataset* poSrcDS);
++	
++	/**
++	 * Sets additional metadata from MTL file
++	 */
++	static void SetMtlAdditionalMetadata(GDALDataset* poDestDS,
++	    CPLHastTableH hMtl);
+ };
+ 
+ /**
+@@ -272,6 +278,7 @@
+ 
+     // Copy common dataset info.
+     CopyDatasetInfo(poVrtDS, poSrcDS);
++	SetMtlAdditionalMetadata(poVrtDS, hMtl);
+ 
+     // Copy band info.
+     GDALRasterBand* psrcband = poSrcDS->GetRasterBand(1);
+@@ -334,6 +341,7 @@
+ 
+     // Copy common dataset info.
+     CopyDatasetInfo(poVrtDS, poSrcDS);
++	SetMtlAdditionalMetadata(poVrtDS, hMtl);
+     GDALClose(poSrcDS);    
+ 
+     // Set bands (1 to 7 and 9).
+@@ -426,6 +434,7 @@
+ 
+     // Copy common dataset info.
+     CopyDatasetInfo(poVrtDS, poSrcDS);
++	SetMtlAdditionalMetadata(poVrtDS, hMtl);
+     GDALClose(poSrcDS);    
+ 
+     // Set bands 10 and 11.
+@@ -498,8 +507,11 @@
+ 
+     CPLFree(pszDirName);
+     CSLDestroy(papszSD);
++	
++	GDALDataset* poDestDS = (GDALDataset*)GDALOpen(szSrcFilename, GA_ReadOnly);
++	SetMtlAdditionalMetadata(poDestDS, hMtl);
+ 
+-    return (GDALDataset*)GDALOpen(szSrcFilename, GA_ReadOnly);
++    return poDestDS;
+ }
+ 
+ /**
+@@ -618,6 +630,174 @@
+         poDestDS->SetMetadata(ppmd, "GEOLOCATION");
+ }
+ 
++void FASTV6ImageDataset::SetMtlAdditionalMetadata(GDALDataset* poDestDS,
++        CPLHastTableH hMtl) {
++    const char* papszMetadataFileInfo[][2] = { 
++        { "METADATA_FILE_INFO", "ORIGIN" },
++        { "METADATA_FILE_INFO", "REQUEST_ID" },
++        { "METADATA_FILE_INFO", "LANDSAT_SCENE_ID" },
++        { "METADATA_FILE_INFO", "FILE_DATE" },
++        { "METADATA_FILE_INFO", "STATION_ID" },
++        { "METADATA_FILE_INFO", "PROCESSING_SOFTWARE_VERSION" },
++        { "PRODUCT_METADATA", "DATA_TYPE" },
++        { "PRODUCT_METADATA", "ELEVATION_SOURCE" },
++        { "PRODUCT_METADATA", "OUTPUT_FORMAT" },
++        { "PRODUCT_METADATA", "SPACECRAFT_ID" },
++        { "PRODUCT_METADATA", "SENSOR_ID" },
++        { "PRODUCT_METADATA", "WRS_PATH" },
++        { "PRODUCT_METADATA", "WRS_ROW" },
++        { "PRODUCT_METADATA", "NADIR_OFFNADIR" },
++        { "PRODUCT_METADATA", "TARGET_WRS_PATH" },
++        { "PRODUCT_METADATA", "TARGET_WRS_ROW" },
++        { "PRODUCT_METADATA", "DATE_ACQUIRED" },
++        { "PRODUCT_METADATA", "SCENE_CENTER_TIME" },
++        { "PRODUCT_METADATA", "CORNER_UL_LAT_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_UL_LON_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_UR_LAT_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_UR_LON_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_LL_LAT_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_LL_LON_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_LR_LAT_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_LR_LON_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_UL_PROJECTION_X_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_UL_PROJECTION_Y_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_UR_PROJECTION_X_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_UR_PROJECTION_Y_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_LL_PROJECTION_X_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_LL_PROJECTION_Y_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_LR_PROJECTION_X_PRODUCT" },
++        { "PRODUCT_METADATA", "CORNER_LR_PROJECTION_Y_PRODUCT" },
++        { "PRODUCT_METADATA", "PANCHROMATIC_LINES" },
++        { "PRODUCT_METADATA", "PANCHROMATIC_SAMPLES" },
++        { "PRODUCT_METADATA", "REFLECTIVE_LINES" },
++        { "PRODUCT_METADATA", "REFLECTIVE_SAMPLES" },
++        { "PRODUCT_METADATA", "THERMAL_LINES" },
++        { "PRODUCT_METADATA", "THERMAL_SAMPLES" },
++        { "PRODUCT_METADATA", "FILE_NAME_BAND_1" },
++        { "PRODUCT_METADATA", "FILE_NAME_BAND_2" },
++        { "PRODUCT_METADATA", "FILE_NAME_BAND_3" },
++        { "PRODUCT_METADATA", "FILE_NAME_BAND_4" },
++        { "PRODUCT_METADATA", "FILE_NAME_BAND_5" },
++        { "PRODUCT_METADATA", "FILE_NAME_BAND_6" },
++        { "PRODUCT_METADATA", "FILE_NAME_BAND_7" },
++        { "PRODUCT_METADATA", "FILE_NAME_BAND_8" },
++        { "PRODUCT_METADATA", "FILE_NAME_BAND_9" },
++        { "PRODUCT_METADATA", "FILE_NAME_BAND_10" },
++        { "PRODUCT_METADATA", "FILE_NAME_BAND_11" },
++        { "PRODUCT_METADATA", "FILE_NAME_BAND_QUALITY" },
++        { "PRODUCT_METADATA", "METADATA_FILE_NAME" },
++        { "PRODUCT_METADATA", "BPF_NAME_OLI" },
++        { "PRODUCT_METADATA", "BPF_NAME_TIRS" },
++        { "PRODUCT_METADATA", "CPF_NAME" },
++        { "PRODUCT_METADATA", "RLUT_FILE_NAME" },
++        { "IMAGE_ATTRIBUTES", "CLOUD_COVER" },
++        { "IMAGE_ATTRIBUTES", "IMAGE_QUALITY_OLI" },
++        { "IMAGE_ATTRIBUTES", "IMAGE_QUALITY_TIRS" },
++        { "IMAGE_ATTRIBUTES", "ROLL_ANGLE" },
++        { "IMAGE_ATTRIBUTES", "SUN_AZIMUTH" },
++        { "IMAGE_ATTRIBUTES", "SUN_ELEVATION" },
++        { "IMAGE_ATTRIBUTES", "EARTH_SUN_DISTANCE" },
++        { "IMAGE_ATTRIBUTES", "GROUND_CONTROL_POINTS_MODEL" },
++        { "IMAGE_ATTRIBUTES", "GEOMETRIC_RMSE_MODEL" },
++        { "IMAGE_ATTRIBUTES", "GEOMETRIC_RMSE_MODEL_Y" },
++        { "IMAGE_ATTRIBUTES", "GEOMETRIC_RMSE_MODEL_X" },
++        { "IMAGE_ATTRIBUTES", "GROUND_CONTROL_POINTS_VERIFY" },
++        { "IMAGE_ATTRIBUTES", "GEOMETRIC_RMSE_VERIFY" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MAXIMUM_BAND_1" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MINIMUM_BAND_1" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MAXIMUM_BAND_2" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MINIMUM_BAND_2" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MAXIMUM_BAND_3" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MINIMUM_BAND_3" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MAXIMUM_BAND_4" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MINIMUM_BAND_4" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MAXIMUM_BAND_5" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MINIMUM_BAND_5" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MAXIMUM_BAND_6" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MINIMUM_BAND_6" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MAXIMUM_BAND_7" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MINIMUM_BAND_7" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MAXIMUM_BAND_8" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MINIMUM_BAND_8" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MAXIMUM_BAND_9" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MINIMUM_BAND_9" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MAXIMUM_BAND_10" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MINIMUM_BAND_10" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MAXIMUM_BAND_11" },
++        { "MIN_MAX_RADIANCE", "RADIANCE_MINIMUM_BAND_11" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MAXIMUM_BAND_1" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MINIMUM_BAND_1" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MAXIMUM_BAND_2" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MINIMUM_BAND_2" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MAXIMUM_BAND_3" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MINIMUM_BAND_3" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MAXIMUM_BAND_4" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MINIMUM_BAND_4" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MAXIMUM_BAND_5" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MINIMUM_BAND_5" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MAXIMUM_BAND_6" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MINIMUM_BAND_6" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MAXIMUM_BAND_7" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MINIMUM_BAND_7" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MAXIMUM_BAND_8" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MINIMUM_BAND_8" },
++        { "MIN_MAX_REFLECTANCE", "REFLECTANCE_MAXIMUM_BAND_9" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_MULT_BAND_1" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_MULT_BAND_2" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_MULT_BAND_3" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_MULT_BAND_4" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_MULT_BAND_5" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_MULT_BAND_6" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_MULT_BAND_7" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_MULT_BAND_8" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_MULT_BAND_9" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_MULT_BAND_10" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_MULT_BAND_11" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_ADD_BAND_1" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_ADD_BAND_2" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_ADD_BAND_3" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_ADD_BAND_4" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_ADD_BAND_5" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_ADD_BAND_6" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_ADD_BAND_7" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_ADD_BAND_8" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_ADD_BAND_9" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_ADD_BAND_10" },
++        { "RADIOMETRIC_RESCALING", "RADIANCE_ADD_BAND_11" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_MULT_BAND_1" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_MULT_BAND_2" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_MULT_BAND_3" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_MULT_BAND_4" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_MULT_BAND_5" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_MULT_BAND_6" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_MULT_BAND_7" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_MULT_BAND_8" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_MULT_BAND_9" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_ADD_BAND_1" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_ADD_BAND_2" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_ADD_BAND_3" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_ADD_BAND_4" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_ADD_BAND_5" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_ADD_BAND_6" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_ADD_BAND_7" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_ADD_BAND_8" },
++        { "RADIOMETRIC_RESCALING", "REFLECTANCE_ADD_BAND_9" },
++        { "TIRS_THERMAL_CONSTANTS", "K1_CONSTANT_BAND_10" },
++        { "TIRS_THERMAL_CONSTANTS", "K1_CONSTANT_BAND_11" },
++        { "TIRS_THERMAL_CONSTANTS", "K2_CONSTANT_BAND_10" },
++        { "TIRS_THERMAL_CONSTANTS", "K2_CONSTANT_BAND_11" }
++    };
++	
++	size_t count = (sizeof(papszMetadataFileInfo) / sizeof(*papszMetadataFileInfo));
++    for (size_t i = 0; i < count; ++i) {
++       char* pzsMetadata = (char*) GetValue(hMtl, papszMetadataFileInfo[i][0],
++                                            papszMetadataFileInfo[i][1]);
++       if (pzsMetadata != NULL)
++          poDestDS->SetMetadataItem(papszMetadataFileInfo[i][1], pzsMetadata,
++                                    papszMetadataFileInfo[i][0]);
++    }
++}
++
+ /**
+  * Register driver.
+  */

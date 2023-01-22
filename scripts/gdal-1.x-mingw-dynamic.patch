@@ -1,0 +1,21 @@
+--- ./GNUmakefile	2012-05-17 03:30:56 +0000
++++ ./GNUmakefile	2012-05-31 23:14:45 +0000
+@@ -1,13 +1,13 @@
+ 
+ include GDALmake.opt
+ 
+-GDAL_OBJ	=	$(GDAL_ROOT)/frmts/o/*.o \
+-			$(GDAL_ROOT)/gcore/*.o \
+-			$(GDAL_ROOT)/port/*.o \
+-			$(GDAL_ROOT)/alg/*.o
++GDAL_OBJ	=	./frmts/o/*.o \
++			./gcore/*.o \
++			./port/*.o \
++			./alg/*.o
+ 
+ ifeq ($(OGR_ENABLED),yes)
+-GDAL_OBJ += $(GDAL_ROOT)/ogr/ogrsf_frmts/o/*.o
++GDAL_OBJ += ./ogr/ogrsf_frmts/o/*.o
+ endif
+ 
+ include ./ogr/file.lst

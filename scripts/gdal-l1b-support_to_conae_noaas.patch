@@ -1,0 +1,12 @@
+--- frmts/l1b/l1bdataset.cpp	2011-01-14 02:19:04 -0300
++++ frmts/l1b/l1bdataset.cpp	2011-06-15 10:52:12 -0300
+@@ -1454,6 +1454,9 @@ CPLErr L1BDataset::ProcessDatasetHeader(
+             else if ( EQUALN((const char *)abyARSHeader + L1B_NOAA15_HDR_WORD_OFF,
+                              "08", 2) )
+                 iDataFormat = UNPACKED8BIT;
++			else if ( EQUALN((const char *)abyARSHeader + L1B_NOAA15_HDR_WORD_OFF, "  ", 2)
++                  || abyARSHeader[L1B_NOAA15_HDR_WORD_OFF] == '\0' )
++				iDataFormat = PACKED10BIT;
+             else
+             {
+ #ifdef DEBUG

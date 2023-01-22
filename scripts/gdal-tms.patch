@@ -1,0 +1,401 @@
+Index: frmts/wms/gdalwmsdataset.cpp
+===================================================================
+--- ./frmts/wms/gdalwmsdataset.cpp	(revision 21152)
++++ ./frmts/wms/gdalwmsdataset.cpp	(working copy)
+@@ -245,8 +245,20 @@
+                     {
+                         int tile_count_x = atoi(str_tile_count_x);
+                         int tile_count_y = atoi(str_tile_count_y);
+-                        m_data_window.m_sx = tile_count_x * m_block_size_x * (1 << m_data_window.m_tlevel);
+-                        m_data_window.m_sy = tile_count_y * m_block_size_y * (1 << m_data_window.m_tlevel);
++						/* try to eliminate potential overflow and limit the raster size to INT_MAX */
++						double sx = (double)tile_count_x * m_block_size_x * (1 << m_data_window.m_tlevel);
++						double sy = (double)tile_count_y * m_block_size_y * (1 << m_data_window.m_tlevel);
++						int max_size_x = (INT_MAX / m_block_size_x) * m_block_size_x;
++						int max_size_y = (INT_MAX / m_block_size_y) * m_block_size_y;
++						if (sx  <= (double)max_size_x)
++							m_data_window.m_sx = (int)sx;
++						else
++							m_data_window.m_sx = max_size_x;
++
++						if (sy  <= (double)max_size_y)
++							m_data_window.m_sy = (int)sy;
++						else
++							m_data_window.m_sy = max_size_y;
+                     }
+                     else
+                     {
+Index: frmts/wms/gdalwmsrasterband.cpp
+===================================================================
+--- ./frmts/wms/gdalwmsrasterband.cpp	(revision 21152)
++++ ./frmts/wms/gdalwmsrasterband.cpp	(working copy)
+@@ -29,7 +29,43 @@
+  ****************************************************************************/
+ 
+ #include "wmsdriver.h"
++#include "cpl_hash_set.h"
+ 
++typedef struct
++{
++	// wrapper struct for the block cache
++	GDALRasterBlock *poBlock;
++ 	int nXBlockOff;
++ 	int nYBlockOff;
++} BlockCacheCtx;
++
++static unsigned long GDALBlockCacheHashFunc(const void* elt)
++{
++	// calculate hash value
++	BlockCacheCtx* psStruct = (BlockCacheCtx*) elt;
++	return (unsigned long) (psStruct->nXBlockOff ^ psStruct->nYBlockOff);
++}
++
++static int GDALBlockCacheEqualFunc(const void* elt1, const void* elt2)
++{
++	// test equality
++	BlockCacheCtx* psStruct1 = (BlockCacheCtx*) elt1;
++	BlockCacheCtx* psStruct2 = (BlockCacheCtx*) elt2;
++	return psStruct1->nXBlockOff == psStruct2->nXBlockOff && psStruct1->nYBlockOff == psStruct2->nYBlockOff;
++}
++
++static void GDALBlockCacheFreeFunc(void* elt)
++{
++	// destroy the wrapper struct
++	BlockCacheCtx* psStruct = (BlockCacheCtx*) elt;
++	if (psStruct->poBlock != NULL)
++	{
++		psStruct->poBlock->DropLock();
++		delete psStruct->poBlock;
++	}
++	CPLFree(psStruct);
++}
++
+ GDALWMSRasterBand::GDALWMSRasterBand(GDALWMSDataset *parent_dataset, int band, double scale) {
+     //	printf("[%p] GDALWMSRasterBand::GDALWMSRasterBand(%p, %d, %f)\n", this, parent_dataset, band, scale);
+     m_parent_dataset = parent_dataset;
+@@ -44,9 +80,13 @@
+     eDataType = m_parent_dataset->m_data_type;
+     nBlockXSize = m_parent_dataset->m_block_size_x;
+     nBlockYSize = m_parent_dataset->m_block_size_y;
++	m_blocks = CPLHashSetNew(GDALBlockCacheHashFunc, GDALBlockCacheEqualFunc, GDALBlockCacheFreeFunc);
+ }
+ 
+ GDALWMSRasterBand::~GDALWMSRasterBand() {
++	if (m_blocks != NULL)
++		CPLHashSetDestroy(m_blocks);
++
+     for (std::vector<GDALWMSRasterBand *>::iterator it = m_overviews.begin(); it != m_overviews.end(); ++it) {
+         GDALWMSRasterBand *p = *it;
+         delete p;
+@@ -815,6 +855,204 @@
+     return ReadBlocks(0, 0, NULL, bx0, by0, bx1, by1, 1);
+ }
+ 
++/************************************************************************/
++/*                           InitBlockInfo()                            */
++/************************************************************************/
++
++int GDALWMSRasterBand::InitBlockInfo()
++{
++	/* Do some validation of raster and block dimensions in case the driver */
++	/* would have neglected to do it itself */
++	if( nBlockXSize <= 0 || nBlockYSize <= 0 )
++	{
++		CPLError( CE_Failure, CPLE_AppDefined, "Invalid block dimension : %d * %d",
++					nBlockXSize, nBlockYSize );
++		return FALSE;
++	}
++
++	if( nRasterXSize <= 0 || nRasterYSize <= 0 )
++	{
++		CPLError( CE_Failure, CPLE_AppDefined, "Invalid raster dimension : %d * %d",
++					nRasterXSize, nRasterYSize );
++		return FALSE;
++	}
++
++	if (nBlockXSize >= 10000 || nBlockYSize >= 10000)
++	{
++		/* Check that the block size is not overflowing int capacity as it is */
++		/* (reasonnably) assumed in many places (GDALRasterBlock::Internalize(), */
++		/* GDALRasterBand::Fill(), many drivers...) */
++		/* As 10000 * 10000 * 16 < INT_MAX, we don't need to do the multiplication in other cases */
++
++		int nSizeInBytes = nBlockXSize * nBlockYSize * (GDALGetDataTypeSize(eDataType) / 8);
++
++		GIntBig nBigSizeInBytes = (GIntBig)nBlockXSize * nBlockYSize * (GDALGetDataTypeSize(eDataType) / 8);
++		if ((GIntBig)nSizeInBytes != nBigSizeInBytes)
++		{
++			CPLError( CE_Failure, CPLE_NotSupported, "Too big block : %d * %d",
++				nBlockXSize, nBlockYSize );
++			return FALSE;
++		}
++	}
++
++	/* Check for overflows in computation of nBlocksPerRow and nBlocksPerColumn */
++	if (nRasterXSize > INT_MAX - (nBlockXSize-1))
++	{
++		CPLError( CE_Failure, CPLE_NotSupported, "Inappropriate raster width (%d) for block width (%d)",
++					nRasterXSize, nBlockXSize );
++		return FALSE;
++	}
++
++	if (nRasterYSize > INT_MAX - (nBlockYSize-1))
++	{
++		CPLError( CE_Failure, CPLE_NotSupported, "Inappropriate raster height (%d) for block height (%d)",
++					nRasterYSize, nBlockYSize );
++		return FALSE;
++	}
++
++	nBlocksPerRow = ((unsigned int)nRasterXSize+nBlockXSize-1) / nBlockXSize;
++	nBlocksPerColumn = ((unsigned int)nRasterYSize+nBlockYSize-1) / nBlockYSize;
++
++	return TRUE;
++}
++
++/************************************************************************/
++/*                             AdoptBlock()                             */
++/*                                                                      */
++/*      Add a block to the raster band's block matrix.  If this         */
++/*      exceeds our maximum blocks for this layer, flush the oldest     */
++/*      block out.                                                      */
++/*                                                                      */
++/*      This method is protected.                                       */
++/************************************************************************/
++
++CPLErr GDALWMSRasterBand::AdoptBlock( int nXBlockOff, int nYBlockOff,
++									GDALRasterBlock * poBlock )
++{
++	if( !InitBlockInfo() )
++		return CE_Failure;
++
++	BlockCacheCtx* psStruct = (BlockCacheCtx*)CPLMalloc(sizeof(BlockCacheCtx));
++	psStruct->nXBlockOff = nXBlockOff;
++	psStruct->nYBlockOff = nYBlockOff;
++	psStruct->poBlock = poBlock;
++
++	// TODO: Flush oldest block out
++	CPLHashSetInsert(m_blocks, psStruct);
++	poBlock->Touch();
++	return CE_None;
++}
++
++/************************************************************************/
++/*                             FlushCache()                             */
++/************************************************************************/
++
++/**
++* \brief Flush raster data cache.
++*
++* This call will recover memory used to cache data blocks for this raster
++* band, and ensure that new requests are referred to the underlying driver.
++*
++* This method is the same as the C function GDALFlushRasterCache().
++*
++* @return CE_None on success.
++*/
++
++CPLErr GDALWMSRasterBand::FlushCache()
++{
++	if (m_blocks != NULL)
++		CPLHashSetRemoveAll(m_blocks);
++
++	return CE_None;
++}
++
++
++/************************************************************************/
++/*                             FlushBlock()                             */
++/*                                                                      */
++/*      Flush a block out of the block cache.  If it has been           */
++/*      modified write it to disk.  If no specific tile is              */
++/*      indicated, write the oldest tile.                               */
++/*                                                                      */
++/*      Protected method.                                               */
++/************************************************************************/
++
++CPLErr GDALWMSRasterBand::FlushBlock( int nXBlockOff, int nYBlockOff )
++{
++	BlockCacheCtx sStruct;
++	sStruct.nXBlockOff = nXBlockOff;
++	sStruct.nYBlockOff = nYBlockOff;
++	CPLHashSetRemove(m_blocks, &sStruct);
++	return CE_None;
++}
++
++/************************************************************************/
++/*                        TryGetLockedBlockRef()                        */
++/************************************************************************/
++
++/**
++* \brief Try fetching block ref.
++*
++* This method will returned the requested block (locked) if it is already
++* in the block cache for the layer.  If not, NULL is returned. 
++*
++* If a non-NULL value is returned, then a lock for the block will have been
++* acquired on behalf of the caller.  It is absolutely imperative that the
++* caller release this lock (with GDALRasterBlock::DropLock()) or else
++* severe problems may result.
++*
++* @param nBlockXOff the horizontal block offset, with zero indicating
++* the left most block, 1 the next block and so forth.
++*
++* @param nYBlockOff the vertical block offset, with zero indicating
++* the top most block, 1 the next block and so forth.
++*
++* @return NULL if block not available, or locked block pointer.
++*/
++
++GDALRasterBlock *GDALWMSRasterBand::TryGetLockedBlockRef( int nXBlockOff,
++														int nYBlockOff )
++{
++	if( !InitBlockInfo() )
++		return NULL;
++
++	/* -------------------------------------------------------------------- */
++	/*      Validate the request                                            */
++	/* -------------------------------------------------------------------- */
++	if( nXBlockOff < 0 || nXBlockOff >= nBlocksPerRow )
++	{
++		CPLError( CE_Failure, CPLE_IllegalArg,
++					"Illegal nBlockXOff value (%d) in "
++					"GDALRasterBand::TryGetLockedBlockRef()\n",
++					nXBlockOff );
++
++		return( NULL );
++	}
++
++	if( nYBlockOff < 0 || nYBlockOff >= nBlocksPerColumn )
++	{
++		CPLError( CE_Failure, CPLE_IllegalArg,
++					"Illegal nBlockYOff value (%d) in "
++					"GDALRasterBand::TryGetLockedBlockRef()\n",
++					nYBlockOff );
++
++		return( NULL );
++	}
++
++	BlockCacheCtx sStruct;
++	sStruct.nXBlockOff = nXBlockOff;
++	sStruct.nYBlockOff = nYBlockOff;
++	BlockCacheCtx *psStruct = (BlockCacheCtx*) CPLHashSetLookup(m_blocks, &sStruct);
++
++	if (psStruct != NULL)
++	{
++		GDALRasterBlock::SafeLockBlock( &psStruct->poBlock );
++		return psStruct->poBlock;
++	}
++
++	return NULL;
++}
++
+ GDALColorInterp GDALWMSRasterBand::GetColorInterpretation() {
+     return m_color_interp;
+ }
+Index: frmts/wms/wmsdriver.h
+===================================================================
+--- ./frmts/wms/wmsdriver.h	(revision 21152)
++++ ./frmts/wms/wmsdriver.h	(working copy)
+@@ -48,6 +48,7 @@
+ 
+ #include "md5.h"
+ #include "gdalhttp.h"
++#include "cpl_hash_set.h"
+ 
+ class GDALWMSDataset;
+ class GDALWMSRasterBand;
+@@ -406,6 +407,8 @@
+     virtual double GetMaximum( int * );
+     virtual GDALColorTable *GetColorTable();
+     virtual CPLErr AdviseRead(int x0, int y0, int sx, int sy, int bsx, int bsy, GDALDataType bdt, char **options);
++	virtual CPLErr FlushBlock( int = -1, int = -1 );
++	virtual CPLErr FlushCache();
+ 
+     virtual GDALColorInterp GetColorInterpretation();
+     virtual CPLErr SetColorInterpretation( GDALColorInterp );
+@@ -426,12 +429,16 @@
+     CPLErr ReadBlockFromFile(int x, int y, const char *file_name, int to_buffer_band, void *buffer, int advise_read);
+     CPLErr ZeroBlock(int x, int y, int to_buffer_band, void *buffer);
+     CPLErr ReportWMSException(const char *file_name);
++	virtual int InitBlockInfo();
++	virtual CPLErr AdoptBlock( int, int, GDALRasterBlock * );
++	virtual GDALRasterBlock *TryGetLockedBlockRef( int nXBlockOff, int nYBlockYOff );
+ 
+ protected:
+     GDALWMSDataset *m_parent_dataset;
+     double m_scale;
+     std::vector<GDALWMSRasterBand *> m_overviews;
+     int m_overview;
++	CPLHashSet* m_blocks;
+     GDALColorInterp m_color_interp;
+ };
+ 
+Index: gcore/gdal_priv.h
+===================================================================
+--- ./gcore/gdal_priv.h	(revision 21152)
++++ ./gcore/gdal_priv.h	(working copy)
+@@ -522,10 +522,10 @@
+                                      void *, int, int, GDALDataType,
+                                      int, int );
+ 
+-    int            InitBlockInfo();
++    virtual int            InitBlockInfo();
+ 
+-    CPLErr         AdoptBlock( int, int, GDALRasterBlock * );
+-    GDALRasterBlock *TryGetLockedBlockRef( int nXBlockOff, int nYBlockYOff );
++    virtual CPLErr         AdoptBlock( int, int, GDALRasterBlock * );
++    virtual GDALRasterBlock *TryGetLockedBlockRef( int nXBlockOff, int nYBlockYOff );
+ 
+   public:
+                 GDALRasterBand();
+@@ -550,7 +550,7 @@
+ 
+     GDALRasterBlock *GetLockedBlockRef( int nXBlockOff, int nYBlockOff, 
+                                         int bJustInitialize = FALSE );
+-    CPLErr      FlushBlock( int = -1, int = -1, int bWriteDirtyBlock = TRUE );
++    virtual CPLErr      FlushBlock( int = -1, int = -1, int bWriteDirtyBlock = TRUE );
+ 
+     unsigned char*  GetIndexColorTranslationTo(/* const */ GDALRasterBand* poReferenceBand,
+                                                unsigned char* pTranslationTable = NULL,
+Index: port/cpl_hash_set.cpp
+===================================================================
+--- ./port/cpl_hash_set.cpp	(revision 21152)
++++ ./port/cpl_hash_set.cpp	(working copy)
+@@ -364,6 +364,24 @@
+     return FALSE;
+ }
+ 
++void CPLHashSetRemoveAll(CPLHashSet* set)
++{
++	CPLAssert(set != NULL);
++	for(int i=0;i<set->nAllocatedSize;i++)
++	{
++		if (set->fnFreeEltFunc)
++		{
++			CPLList* cur = set->tabList[i];
++			while(cur)
++			{
++				set->fnFreeEltFunc(cur->pData);
++				cur = cur->psNext;
++			}
++		}
++		CPLListDestroy(set->tabList[i]);
++		set->tabList[i] = NULL;
++	}
++}
+ 
+ /************************************************************************/
+ /*                    CPLHashSetHashPointer()                           */
+Index: port/cpl_hash_set.h
+===================================================================
+--- ./port/cpl_hash_set.h	(revision 21152)
++++ ./port/cpl_hash_set.h	(working copy)
+@@ -78,6 +78,8 @@
+ 
+ int          CPL_DLL CPLHashSetRemove(CPLHashSet* set, const void* elt);
+ 
++void         CPL_DLL CPLHashSetRemoveAll(CPLHashSet* set);
++
+ unsigned long CPL_DLL CPLHashSetHashPointer(const void* elt);
+ 
+ int          CPL_DLL CPLHashSetEqualPointer(const void* elt1, const void* elt2);

@@ -1,0 +1,11 @@
+--- CMakeLists.txt	2011-10-07 16:04:50.000000000 -0300
++++ CMakeLists.txt	2013-07-05 16:54:12.000000000 -0300
+@@ -172,8 +172,6 @@
+             MESSAGE(STATUS "Looking for projects.h header from PROJ.4 library - found")
+             ADD_DEFINITIONS(-DHAVE_PROJECTS_H=1)
+             INCLUDE_DIRECTORIES(${PROJ4_INCLUDE_DIR_2})
+-        ELSE()
+-            MESSAGE(FATAL_ERROR "Looking for projects.h from PROJ.4 library - not found")
+         ENDIF()
+     ENDIF()
+ ENDIF()

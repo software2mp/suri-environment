@@ -1,0 +1,1676 @@
+diff -ur ./GDALmake.opt.in ./GDALmake.opt.in
+--- ./GDALmake.opt.in	2012-05-17 00:30:56.000000000 -0300
++++ ./GDALmake.opt.in	2012-06-05 15:39:47.552444053 -0300
+@@ -475,12 +475,12 @@
+ #	and their uppercase form should be the format portion of the
+ #	format registration entry point.  eg. gdb -> GDALRegister_GDB().
+ #
+-GDAL_FORMATS = 	gxf gtiff hfa aigrid aaigrid ceos ceos2 iso8211 xpm \
++GDAL_FORMATS = 	gxf gtiff hfa aigrid aaigrid avnir2 ceos ceos2 iso8211 xpm \
+ 		sdts raw dted mem jdem envisat elas fit vrt usgsdem l1b \
+ 		nitf bmp pcidsk airsar rs2 ilwis rmf leveller sgi srtmhgt \
+ 		idrisi gsg ingr ers jaxapalsar dimap gff cosar pds adrg \
+ 		coasp tsx terragen blx msgn til r northwood saga xyz hf2 \
+-		kmlsuperoverlay ctg e00grid zmap ngsgeoid iris map\
++		kmlsuperoverlay ozi ctg e00grid zmap ngsgeoid iris map prism \
+ 		@OPT_GDAL_FORMATS@
+
+
+diff -Nur ./frmts/avnir2/GNUmakefile ./frmts/avnir2/GNUmakefile
+--- ./frmts/avnir2/GNUmakefile	1969-12-31 21:00:00.000000000 -0300
++++ ./frmts/avnir2/GNUmakefile	2012-06-05 15:27:14.018128650 -0300
+@@ -0,0 +1,15 @@
++
++include ../../GDALmake.opt
++
++OBJ	=	avnir2dataset.o
++
++CPPFLAGS	:=	$(GDAL_INCLUDE) $(CPPFLAGS) $(XTRA_OPT)
++
++default:	$(OBJ:.o=.$(OBJ_EXT))
++
++clean:
++	rm -f *.o
++
++all:	$(OBJ:.o=.$(OBJ_EXT))
++
++install-obj:	$(O_OBJ:.o=.$(OBJ_EXT))
+diff -Nur ./frmts/avnir2/makefile.vc ./frmts/avnir2/makefile.vc
+--- ./frmts/avnir2/makefile.vc	1969-12-31 21:00:00.000000000 -0300
++++ ./frmts/avnir2/makefile.vc	2012-06-05 15:27:04.074575108 -0300
+@@ -0,0 +1,13 @@
++
++OBJ	=	avnir2dataset.obj
++
++GDAL_ROOT	=	..\..
++
++!INCLUDE $(GDAL_ROOT)\nmake.opt
++
++default:	$(OBJ)
++	xcopy /D  /Y *.obj ..\o
++
++clean:
++	-del *.obj
++
+diff -cr -N ./frmts/avnir2/avnir2dataset.cpp ./frmts/avnir2/avnir2dataset.cpp
+*** ./frmts/avnir2/avnir2dataset.cpp	Wed Dec 31 21:00:00 1969
+--- ./frmts/avnir2/avnir2dataset.cpp	Mon Jul 11 17:08:02 2011
+***************
+*** 0 ****
+--- 1,679 ----
++ /******************************************************************************
++  * $Id: avnir2dataset.cpp 20996 2010-10-28 18:38:15Z rouault $
++  *
++  * Project:  AVNIR-2 imagery reader
++  * Purpose:  Support for AVNIR-2(Based on AVNIR2 PALSAR driver of Philippe Vachon)
++  * Author:   Rodolfo Bonnin <rodolfobonnin@suremptec.com.ar>
++  *
++  ******************************************************************************
++  * Copyright (c) 2011, Rodolfo Bonnin <rodolfobonnin@suremptec.com.ar>
++  *
++  * Permission is hereby granted, free of charge, to any person obtaining a
++  * copy of this software and associated documentation files (the "Software"),
++  * to deal in the Software without restriction, including without limitation
++  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++  * and/or sell copies of the Software, and to permit persons to whom the
++  * Software is furnished to do so, subject to the following conditions:
++  *
++  * The above copyright notice and this permission notice shall be included
++  * in all copies or substantial portions of the Software.
++  *
++  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++  * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++  * DEALINGS IN THE SOFTWARE.
++  ****************************************************************************/
++ 
++ #include "gdal_pam.h"
++ #include "ogr_spatialref.h"
++ #include <gdal.h>
++ #include <gdal_alg.h>
++ CPL_CVSID("$Id: avnir2dataset.cpp 20996 2010-10-28 18:38:15Z rouault $");
++ 
++ CPL_C_START
++ void	GDALRegister_AVNIR2(void);
++ CPL_C_END
++ 
++ #if defined(WIN32) || defined(WIN32CE)
++ #define SEP_STRING "\\"
++ #else
++ #define SEP_STRING "/"
++ #endif
++ 
++ /* read binary fields */
++ #ifdef CPL_LSB
++ #define READ_WORD(f, x) \
++ 	do { \
++ 		VSIFReadL( &(x), 4, 1, (f) ); \
++ 		(x) = CPL_SWAP32( (x) ); \
++ 	} while (0);
++ #define READ_SHORT(f, x) \
++ 	do { \
++ 		VSIFReadL( &(x), 2, 1, (f) ); \
++ 		(x) = CPL_SWAP16( (x) ); \
++ 	} while (0);
++ #else
++ #define READ_WORD(f, x) do { VSIFReadL( &(x), 4, 1, (f) ); } while (0);
++ #define READ_SHORT(f, x) do { VSIFReadL( &(x), 2, 1, (f) ); } while (0);
++ #endif /* def CPL_LSB */
++ #define READ_BYTE(f, x) do { VSIFReadL( &(x), 1, 1, (f) ); } while (0);
++ 
++ /* read floating point value stored as ASCII */
++ #define READ_CHAR_FLOAT(n, l, f) \
++ 	do {\
++ 		char psBuf[(l+1)]; \
++ 		psBuf[(l)] = '\0'; \
++ 		VSIFReadL( &psBuf, (l), 1, (f) );\
++ 		(n) = CPLAtof( psBuf );\
++ 	} while (0);
++ 
++ /* read numbers stored as ASCII */
++ #define READ_CHAR_VAL(x, n, f) \
++ 	do { \
++ 		char psBuf[(n+1)]; \
++ 		psBuf[(n)] = '\0';\
++ 		VSIFReadL( &psBuf, (n), 1, (f) ); \
++ 		(x) = atoi(psBuf); \
++ 	} while (0);
++ 
++ /* read string fields 
++  * note: string must be size of field to be extracted + 1
++  */
++ #define READ_STRING(s, n, f) \
++ 	do { \
++ 		VSIFReadL( &(s), 1, (n), (f) ); \
++ 		(s)[(n)] = '\0'; \
++ 	} while (0);
++ 
++ /*************************************************************************/
++ 
++ 
++ 
++ 
++ /* some image option descriptor records */
++ 
++ #define IMAGE_DATA_OFFSET_OFFSET 186
++ #define IMAGE_DATA_OFFSET_LENGTH 6
++ #define LINES_PER_BAND_OFFSET 180
++ #define LINES_PER_BAND_LENGHT 6
++ #define RECORD_LENGHT_OFFSET 186
++ #define RECORD_LENGHT_LENGHT 6
++ #define PRODUCT_LEVEL_OFFSET 387
++ #define PRODUCT_LEVEL_LENGHT 1
++ #define PRODUCT_GEOCODING_OFFSET 1468
++ #define PRODUCT_GEOCODING_LENGHT 1
++ #define IMAGE_OPT_DESC_LENGTH 720
++ 
++ /* metadata to be extracted from the leader file */
++ #define LEADER_FILE_DESCRIPTOR_LENGTH 4680
++ #define TOP_LEFT_EASTING_OFFSET 1732
++ #define DATA_SET_SUMMARY_LENGTH 4680
++ 
++ /* relative to leader file descriptor + dataset summary length */
++ #define ALPHANUMERIC_PROJECTION_NAME_OFFSET 412
++ #define UTM_ZONE_OFFSET 96
++ #define UTM_HEMISPHERE_OFFSET 95
++ 
++ /* a few useful enums */
++ enum eFileType {
++ 	level_1A = 0,
++ 	level_1B1,
++ 	level_1B2R,
++ 	level_1B2G
++ };
++ 
++ 
++ 
++ 
++ /************************************************************************/
++ /* ==================================================================== */
++ /*                        AVNIR2Dataset                             */
++ /* ==================================================================== */
++ /************************************************************************/
++ 
++ class AVNIR2RasterBand;
++ 
++ class AVNIR2Dataset : public GDALPamDataset {
++     friend class AVNIR2RasterBand;
++ private:
++     GDAL_GCP *pasGCPList;
++     int nGCPCount;
++     eFileType nFileType;
++     double adfGeoTransform[6];
++     char *pszProjection;
++ public:
++     AVNIR2Dataset();
++     ~AVNIR2Dataset();
++ 
++     int GetGCPCount();
++     const GDAL_GCP *GetGCPs();
++ 
++     static GDALDataset *Open( GDALOpenInfo *poOpenInfo );
++     static int Identify( GDALOpenInfo *poOpenInfo );
++     static void ReadMetadata( AVNIR2Dataset *poDS, VSILFILE *fp );
++     CPLErr GetGeoTransform(double * padfTransform );
++ 
++ 
++     const char* GetProjectionRef();
++ 
++ 
++     const char * GetGCPProjection();
++ };
++ 
++ AVNIR2Dataset::AVNIR2Dataset()
++ {
++    pasGCPList = NULL;
++    nGCPCount = 0;
++    adfGeoTransform[0] = 0.0;
++    adfGeoTransform[1] = 1.0;
++    adfGeoTransform[2] = 0.0;
++    adfGeoTransform[3] = 0.0;
++    adfGeoTransform[4] = 0.0;
++    adfGeoTransform[5] = 1.0;
++    pszProjection = NULL;
++ }
++ 
++ AVNIR2Dataset::~AVNIR2Dataset()
++ {
++     if( nGCPCount > 0 ) 
++     {
++         GDALDeinitGCPs( nGCPCount, pasGCPList ); 
++         CPLFree( pasGCPList ); 
++     }
++ }
++ 
++ /************************************************************************/
++ /* ==================================================================== */
++ /*                        AVNIR2RasterBand                          */
++ /* ==================================================================== */
++ /************************************************************************/
++ 
++ class AVNIR2RasterBand : public GDALRasterBand {
++     VSILFILE *fp;
++     int nRasterXSize;
++     int nRasterYSize;
++ 
++     eFileType nFileType;
++     int nBitsPerSample;
++     int nSamplesPerGroup;
++     int nProductLevel;
++     int nRecordSize;
++     int nObservationMode;
++     int nfileNum;
++     int nImageDataOffset;
++ 
++ public:
++     AVNIR2RasterBand( AVNIR2Dataset *poDS, int nBand, VSILFILE *fp );
++     ~AVNIR2RasterBand();
++ 
++     CPLErr IReadBlock( int nBlockXOff, int nBlockYOff, void *pImage );
++ 
++ 
++ };
++ 
++ /************************************************************************/
++ /*                         AVNIR2RasterBand()                       */
++ /************************************************************************/
++ 
++ AVNIR2RasterBand::AVNIR2RasterBand( AVNIR2Dataset *poDS,
++ 	int nBand, VSILFILE *fp )
++ {
++     this->fp = fp;
++ 
++ 
++     /* Read image data offset */
++ 
++     VSIFSeekL( fp, IMAGE_DATA_OFFSET_OFFSET, SEEK_SET );
++     READ_CHAR_VAL( nImageDataOffset ,  IMAGE_DATA_OFFSET_LENGTH , fp );
++ 
++    /* Read lines per band and record lenght */
++ 
++     VSIFSeekL( fp, LINES_PER_BAND_OFFSET, SEEK_SET );
++     READ_CHAR_VAL( nRasterYSize ,  LINES_PER_BAND_LENGHT , fp );
++ 
++     VSIFSeekL( fp, RECORD_LENGHT_OFFSET, SEEK_SET );
++     READ_CHAR_VAL( nRasterXSize ,  RECORD_LENGHT_LENGHT , fp );
++ 
++  	 poDS->nRasterXSize = nRasterXSize ;
++  	 poDS->nRasterYSize = nRasterYSize;
++ 
++     /* size of block we can read */
++     nBlockXSize = nRasterXSize  ;
++     nBlockYSize = 1;
++ 
++     /* set the file pointer to the first SAR data record */
++     VSIFSeekL( fp, IMAGE_OPT_DESC_LENGTH, SEEK_SET );
++ }	
++ 
++ /************************************************************************/
++ /*                        ~AVNIR2RasterBand()                       */
++ /************************************************************************/
++ 
++ AVNIR2RasterBand::~AVNIR2RasterBand()
++ {
++     if (fp)
++         VSIFCloseL(fp);
++ 
++ }
++ 
++ /************************************************************************/
++ /*                             IReadBlock()                             */
++ /************************************************************************/
++ 
++ CPLErr AVNIR2RasterBand::IReadBlock( int nBlockXOff, int nBlockYOff,
++ 	void *pImage )
++ {
++ 	int nOffset = nImageDataOffset + nBlockYOff * nRasterXSize ;
++        VSIFSeekL( fp, nOffset , SEEK_SET );
++ 		 VSIFReadL( pImage  , 1 , (nRasterXSize   ), fp );
++ 		 return CE_None;
++ }
++ 
++ 
++ /************************************************************************/
++ /* ==================================================================== */
++ /* 			AVNIR2Dataset	     	*/
++ /* ==================================================================== */
++ /************************************************************************/
++ 
++ /************************************************************************/
++ /*                          ReadMetadata()                              */
++ /************************************************************************/
++ 
++ int AVNIR2Dataset::GetGCPCount() {
++    if (nFileType==level_1B2R)
++    	return nGCPCount;
++    else
++    	return 0;
++ }
++ 
++ 
++ /************************************************************************/
++ /*                             GetGCPs()                                */
++ /************************************************************************/
++ 
++ const GDAL_GCP *AVNIR2Dataset::GetGCPs() {
++    if (nFileType==level_1B2R)
++     return pasGCPList;
++    else
++    	return NULL;
++ }
++ 
++ 
++ /************************************************************************/
++ /*                             GetGCPProjection()                       */
++ /************************************************************************/
++ 
++ 
++ const char * AVNIR2Dataset::GetGCPProjection() {
++ 
++ 	if (nFileType==level_1B2R)
++ 		return pszProjection;
++ 	else
++ 		return "";
++ }
++ 
++ /************************************************************************/
++ /*                          GetProjectionRef()                          */
++ /************************************************************************/
++ 
++ const char *AVNIR2Dataset::GetProjectionRef()
++ 
++ {
++ 	if (nFileType==level_1B2G  || nFileType==level_1B2R )
++         return pszProjection;
++ 	else
++ 		return "";
++ 
++ }
++ 
++ /************************************************************************/
++ /*                            ReadMetadata()                            */
++ /************************************************************************/
++ 
++ void AVNIR2Dataset::ReadMetadata( AVNIR2Dataset *poDS, VSILFILE *fp ) {
++ 
++ 
++         /* Alphanumeric projection name */
++         VSIFSeekL( fp, LEADER_FILE_DESCRIPTOR_LENGTH +
++                   DATA_SET_SUMMARY_LENGTH + ALPHANUMERIC_PROJECTION_NAME_OFFSET,
++                   SEEK_SET );
++         char pszProjName[33];
++         READ_STRING(pszProjName, 32, fp);
++         poDS->SetMetadataItem( "PROJECTION_NAME", pszProjName );
++ 		
++ }
++ 
++ /************************************************************************/
++ /*                              Identify()                              */
++ /************************************************************************/
++ 
++ int AVNIR2Dataset::Identify( GDALOpenInfo *poOpenInfo ) {
++     if ( poOpenInfo->fp == NULL || poOpenInfo->nHeaderBytes < 360 )
++         return 0;
++ 
++     /* First, check that this is an AVNIR image indeed */
++     if ( !EQUALN((char *)(poOpenInfo->pabyHeader + 60),"AL", 2) 
++          || !EQUALN(CPLGetBasename((char *)(poOpenInfo->pszFilename)) + 4, 
++                     "ALAV2", 5) )
++     {
++         return 0;
++     }
++ 
++     VSILFILE *fpL = VSIFOpenL( poOpenInfo->pszFilename, "r" );
++     if( fpL == NULL )
++         return FALSE;
++ 
++     /* Check that this is a volume directory file */
++     int nRecordSeq = 0;
++     int nRecordSubtype = 0;
++     int nRecordType = 0;
++     int nSecondSubtype = 0;
++     int nThirdSubtype = 0;
++     int nLengthRecord = 0;
++ 
++     VSIFSeekL(fpL, 0, SEEK_SET);
++ 
++     READ_WORD(fpL, nRecordSeq);
++     READ_BYTE(fpL, nRecordSubtype);
++     READ_BYTE(fpL, nRecordType);
++     READ_BYTE(fpL, nSecondSubtype);
++     READ_BYTE(fpL, nThirdSubtype);
++     READ_WORD(fpL, nLengthRecord);
++ 
++     VSIFCloseL( fpL );
++ 
++     /* Check that we have the right record */
++     if ( nRecordSeq == 1 && nRecordSubtype == 192 && nRecordType == 192 &&
++          nSecondSubtype == 18 && nThirdSubtype == 18 && nLengthRecord == 360 )
++     {
++         return 1;
++     }
++ 
++     return 0;
++ }
++ 
++ /************************************************************************/
++ /*                                Open()                                */
++ /************************************************************************/
++ GDALDataset *AVNIR2Dataset::Open( GDALOpenInfo * poOpenInfo ) {
++     /* Check that this actually is a AVNIR2 product */
++     if ( !AVNIR2Dataset::Identify(poOpenInfo) )
++         return NULL;
++         
++ /* -------------------------------------------------------------------- */
++ /*      Confirm the requested access is supported.                      */
++ /* -------------------------------------------------------------------- */
++     if( poOpenInfo->eAccess == GA_Update )
++     {
++         CPLError( CE_Failure, CPLE_NotSupported, 
++                   "The ALOS AVNIR2 driver does not support update access to existing"
++                   " datasets.\n" );
++         return NULL;
++     }
++     
++     AVNIR2Dataset *poDS = new AVNIR2Dataset();
++     /* Read image options record to determine the type of data */
++ 
++     int nProductLevel;
++     eFileType tempFileType;
++ 
++     VSILFILE *fpL = VSIFOpenL( poOpenInfo->pszFilename, "r" );
++     if( fpL == NULL )
++         return FALSE;
++  /* Read product level */
++     VSIFSeekL( fpL , PRODUCT_LEVEL_OFFSET, SEEK_SET );
++     READ_CHAR_VAL( nProductLevel,  PRODUCT_LEVEL_LENGHT , fpL );
++ 
++     /*Read product geocoding */
++ 
++     char geocoding[2];
++     VSIFSeekL( fpL , PRODUCT_GEOCODING_OFFSET, SEEK_SET );
++     READ_STRING( geocoding , 1, fpL );
++ 
++     VSIFCloseL(fpL);
++ 
++     switch (nProductLevel){
++    	 case 0:
++    		 tempFileType=level_1A;
++    		 break;
++    	 case 1:
++    		 tempFileType=level_1B1;
++    		 break;
++    	 case 2:
++    		 if (geocoding[0]=='R')
++    			 tempFileType=level_1B2R;
++    		 else
++    			 tempFileType=level_1B2G;
++    		 break;
++     };
++ 
++     poDS->nFileType = tempFileType;
++ 
++     /* Get the suffix of the filename, we'll need this */
++     char *pszSuffix = VSIStrdup( (char *)
++                                  (CPLGetFilename( poOpenInfo->pszFilename ) + 3) );
++ 
++     /* Try to read each of the polarizations */
++     char *pszImgFile = (char *)VSIMalloc( 
++         strlen( CPLGetDirname( poOpenInfo->pszFilename ) ) + 
++         strlen( pszSuffix ) + 8 );
++ 
++     int nFileNum = 0;
++     VSILFILE *fpList[8];
++ 
++     /* Read all CCDs */
++      for ( int iband=1 ; iband < 5 ; iband ++) {
++         sprintf( pszImgFile, "%s%sIMG-0%i%s",
++                  CPLGetDirname(poOpenInfo->pszFilename), SEP_STRING, iband, pszSuffix );
++     fpList[nFileNum] = VSIFOpenL( pszImgFile, "rb" );
++     if (fpList[nFileNum] != NULL) {
++ 
++        poDS->SetBand( nFileNum + 1 , new AVNIR2RasterBand( poDS, nFileNum , fpList[nFileNum] ) );
++    	 nFileNum++;
++      }
++      }
++ 
++     VSIFree( pszImgFile );
++ 
++     /* did we get at least one band? */
++     if (fpList[0] == NULL  ) {
++         CPLError( CE_Failure, CPLE_AppDefined,
++                   "Unable to find any image data. Aborting opening as AVNIR2 image.");
++         delete poDS;
++         return NULL;
++     }
++ 
++     /* read metadata from Leader file. */
++     char *pszLeaderFilename = (char *)VSIMalloc( 
++         strlen( CPLGetDirname( poOpenInfo->pszFilename ) ) + 
++         strlen(pszSuffix) + 5 );
++     sprintf( pszLeaderFilename, "%s%sLED%s", 
++              CPLGetDirname( poOpenInfo->pszFilename ) , SEP_STRING, pszSuffix );
++ 
++     int pszUtmHemisphere;
++     bool hemisphereisnorth=false;
++     int pszUtmZone;
++     VSILFILE *fpLeader = VSIFOpenL( pszLeaderFilename, "rb" );
++ 
++     /* check if the leader is actually present and the formats has a
++      * coordinate system */
++     if ( (fpLeader) != NULL && ((nProductLevel==level_1B2R ||nProductLevel==level_1B2G) ) ) {
++         ReadMetadata(poDS, fpLeader);
++ 
++ 
++      /* UTM ZONE */
++ 		VSIFSeekL( fpLeader, LEADER_FILE_DESCRIPTOR_LENGTH +
++ 					 DATA_SET_SUMMARY_LENGTH + UTM_ZONE_OFFSET,
++ 					 SEEK_SET );
++ 		READ_CHAR_VAL(pszUtmZone, 2, fpLeader);
++ 
++ 		/* UTM HEMISPHERE  */
++ 
++ 
++ 		VSIFSeekL( fpLeader, LEADER_FILE_DESCRIPTOR_LENGTH +
++ 					 DATA_SET_SUMMARY_LENGTH + UTM_HEMISPHERE_OFFSET,
++ 					 SEEK_SET );
++ 		READ_CHAR_VAL(pszUtmHemisphere, 1, fpLeader);
++ 		if ( pszUtmHemisphere == 0 ) hemisphereisnorth=true;
++ 
++ 		/*  Create the spatial reference  */
++ 		OGRSpatialReference oSRS , *originCornerSRS, destinationCornerSRS ;
++ 		oSRS.SetProjCS( "UTM" );
++ 		oSRS.SetUTM(pszUtmZone,hemisphereisnorth);
++ #ifdef ALOS_CUSTOM_GEOGRAPHIC_COORDINATE_SYSTEM
++ 		oSRS.SetGeogCS( "ITRF97 (wgs84 equivalent)",
++ 		                "International_Terrestrial_Reference_Frame_1997" ,
++ 		                "GRS 1980",
++ 		                6378137.0,
++ 		                298.257222101,
++ 		                "Greenwich",
++ 		                0.0,
++ 		                "degree",
++ 		                0.0 );
++ 		oSRS.SetTOWGS84 ( 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  ) ;
++ 		oSRS.SetAuthority ( "GEOGCS|DATUM" , "EPSG" , 6655    ) ;
++ 		oSRS.SetAuthority ( "GEOGCS|DATUM|SPHEROID" , "EPSG" , 7019    ) ;
++ 		oSRS.SetAuthority ( "GEOGCS|PRIMEM" , "EPSG" , 8901    ) ;
++ 
++ #else
++ 		oSRS.SetWellKnownGeogCS("WGS84");
++ #endif //ALOS_CUSTOM_COORDINATE_SYSTEM
++ 
++ 		destinationCornerSRS.SetUTM(pszUtmZone,hemisphereisnorth);
++ 		originCornerSRS=oSRS.CloneGeogCS();
++ 
++ 
++ 
++ 		/* Create the coordinate transformation */
++ 		OGRCoordinateTransformation *coordTransform;
++ 		coordTransform=OGRCreateCoordinateTransformation(  originCornerSRS   , &oSRS   );
++ 
++ 	   if ( coordTransform!=NULL ) {
++ 
++     /* Extract corner points in grads, transform them into meters, and calculate
++      * the affine matrix */
++ 
++     double latToProject, longToProject;
++ 
++     poDS->nGCPCount = 4;
++     GDAL_GCP gcplist[poDS->nGCPCount];
++     poDS->pasGCPList = (GDAL_GCP *)CPLCalloc( sizeof(GDAL_GCP),
++                                                   poDS->nGCPCount );
++     GDALInitGCPs( poDS->nGCPCount, poDS->pasGCPList );
++ 
++     for (int i = 0; i < poDS->nGCPCount; i++) {
++         char pszID[2];
++         sprintf( pszID, "%d", i + 1);
++         gcplist[i].pszId = CPLStrdup( pszID );
++         gcplist[i].pszInfo = CPLStrdup( pszID );
++         gcplist[i].dfGCPZ = 0.0;
++     }
++ 
++ 	 /* seek to start of corner points */
++ 
++ 	 VSIFSeekL( fpLeader, LEADER_FILE_DESCRIPTOR_LENGTH +
++ 			 TOP_LEFT_EASTING_OFFSET, SEEK_SET );
++ 
++ 	 /* Fill all corner projected coordinates */
++ 
++ 	 for ( int iCorner=0; iCorner < poDS->nGCPCount; ++iCorner ){
++ 		 READ_CHAR_FLOAT(latToProject, 16, fpLeader);
++ 		 READ_CHAR_FLOAT(longToProject, 16, fpLeader);
++ 
++ 		 coordTransform->Transform( 1,  &longToProject   , &latToProject );
++ 
++ 	    poDS->pasGCPList[iCorner].dfGCPY = latToProject;
++ 	    poDS->pasGCPList[iCorner].dfGCPX = longToProject;
++ 
++ 
++ 		 gcplist[iCorner].dfGCPY = latToProject;
++ 		 gcplist[iCorner].dfGCPX = longToProject;
++ 	 }
++ 
++ 	 /* Fill the pixel and lines of the corners */
++ 
++ 	 gcplist[0].dfGCPLine = 0.5;
++ 	 gcplist[0].dfGCPPixel = 0.5;
++ 	 gcplist[1].dfGCPLine = 0.5;
++ 	 gcplist[1].dfGCPPixel = poDS->nRasterXSize - 0.5;
++ 	 gcplist[2].dfGCPLine = poDS->nRasterYSize - 0.5;
++ 	 gcplist[2].dfGCPPixel = 0.5;
++ 	 gcplist[3].dfGCPLine = poDS->nRasterYSize - 0.5;
++ 	 gcplist[3].dfGCPPixel = poDS->nRasterXSize - 0.5;
++ 
++ 	 poDS->pasGCPList[0].dfGCPLine = 0.0;
++ 	 poDS->pasGCPList[0].dfGCPPixel = 0.0;
++ 	 poDS->pasGCPList[1].dfGCPLine = 0.5;
++ 	 poDS->pasGCPList[1].dfGCPPixel = poDS->nRasterXSize - 0.5;
++ 	 poDS->pasGCPList[2].dfGCPLine = poDS->nRasterYSize - 0.5;
++ 	 poDS->pasGCPList[2].dfGCPPixel = 0.5;
++ 	 poDS->pasGCPList[3].dfGCPLine = poDS->nRasterYSize - 0.5;
++ 	 poDS->pasGCPList[3].dfGCPPixel = poDS->nRasterXSize - 0.5;
++ 
++ 
++ 
++ 			/* Calculate the affine transform */
++ 
++ 	 GDALGCPsToGeoTransform(4 , gcplist , poDS->adfGeoTransform , 1 );
++ 
++ 	char *pszSRS_WKT = NULL;
++ 	oSRS.exportToWkt( &pszSRS_WKT );
++ 	poDS->SetProjection( pszSRS_WKT );
++ 
++ 	oSRS.exportToWkt( &(poDS->pszProjection) );
++ 
++ 	CPLFree( pszSRS_WKT );
++ 	VSIFCloseL(fpLeader);
++ 	VSIFree(pszLeaderFilename);
++ 	VSIFree( pszSuffix );
++ 
++ }
++ 
++ }
++ /* -------------------------------------------------------------------- */
++ /*      Initialize any PAM information.                                 */
++ /* -------------------------------------------------------------------- */
++     poDS->SetDescription( poOpenInfo->pszFilename );
++     poDS->TryLoadXML();
++ 
++ /* -------------------------------------------------------------------- */
++ /*      Check for overviews.                                            */
++ /* -------------------------------------------------------------------- */
++     poDS->oOvManager.Initialize( poDS, poOpenInfo->pszFilename );
++     return poDS;
++ }
++ 
++ 
++ 
++ CPLErr AVNIR2Dataset::GetGeoTransform(double * padfTransform )
++ {
++ if (nFileType==level_1A | nFileType==level_1B1 ) {
++ 	return CE_Failure;
++ }
++ else{
++ 	memcpy( padfTransform, adfGeoTransform, sizeof(double)*6 );
++ 	return CE_None;
++ }
++ }
++ 
++ /************************************************************************/
++ /*                      GDALRegister_AVNIR2()                       */
++ /************************************************************************/
++ 
++ void GDALRegister_AVNIR2() {
++     GDALDriver	*poDriver;
++ 
++     if( GDALGetDriverByName( "AVNIR2" ) == NULL ) {
++         poDriver = new GDALDriver();
++         poDriver->SetDescription( "AVNIR2" );
++         poDriver->SetMetadataItem( GDAL_DMD_LONGNAME, 
++                                    "AVNIR2 Product Reader (Level 1A/1B2)" );
++         poDriver->pfnOpen = AVNIR2Dataset::Open;
++         poDriver->pfnIdentify = AVNIR2Dataset::Identify;
++         GetGDALDriverManager()->RegisterDriver( poDriver );
++     }
++ }
+diff -cr -N ./frmts/gdalallregister.cpp ./frmts/gdalallregister.cpp
+*** ./frmts/gdalallregister.cpp	Fri Jan 14 02:19:05 2011
+--- ./frmts/gdalallregister.cpp	Mon Jul  4 16:33:49 2011
+@@ -108,6 +108,8 @@
+     
+ #ifdef FRMT_jaxapalsar
+     GDALRegister_PALSARJaxa();
++    GDALRegister_PRISM();
++    GDALRegister_AVNIR2();
+ #endif
+     
+ #ifdef FRMT_gff
+diff -cr -N ./frmts/jaxapalsar/jaxapalsardataset.cpp ./frmts/jaxapalsar/jaxapalsardataset.cpp
+--- ./frmts/jaxapalsar/jaxapalsardataset.cpp	2012-05-17 00:30:54 -0300
++++ ./frmts/jaxapalsar/jaxapalsardataset.cpp	2012-06-04 20:46:35 -0300
+@@ -31,6 +31,9 @@
+  ****************************************************************************/
+ 
+ #include "gdal_pam.h"
++#include "ogr_spatialref.h"
++#include <gdal.h>
++#include <gdal_alg.h>
+ 
+ CPL_CVSID("$Id: jaxapalsardataset.cpp 27044 2014-03-16 23:41:27Z rouault $");
+ 
+@@ -127,7 +130,10 @@
+ #define PIXEL_SPACING_OFFSET 92
+ #define LINE_SPACING_OFFSET 108
+ #define ALPHANUMERIC_PROJECTION_NAME_OFFSET 412
++#define UTM_ZONE_OFFSET 476
++#define UTM_HEMISPHERE_OFFSET 496
+ #define TOP_LEFT_LAT_OFFSET 1072
++#define TOP_LEFT_EASTING_OFFSET 944
+ #define TOP_LEFT_LON_OFFSET 1088
+ #define TOP_RIGHT_LAT_OFFSET 1104
+ #define TOP_RIGHT_LON_OFFSET 1120
+@@ -150,6 +156,23 @@
+ 	vv
+ };
+ 
++typedef struct
++{
++	GDALTransformerInfo sTI;
++	double adfToGeoX[20];
++	double adfToGeoY[20];
++
++	double adfFromGeoX[20];
++	double adfFromGeoY[20];
++
++	int nOrder;
++	int intbReversed;
++
++	int nGCPCount;
++	GDAL_GCP *pasGCPList;
++
++} GCPTransformInfo;
++
+ /************************************************************************/
+ /* ==================================================================== */
+ /*                        PALSARJaxaDataset                             */
+@@ -616,7 +639,113 @@
+     /* check if the leader is actually present */
+     if (fpLeader != NULL) {
+         ReadMetadata(poDS, fpLeader);
+-        VSIFCloseL(fpLeader);
++       /* UTM ZONE */
++   	   	VSIFSeekL( fpLeader, LEADER_FILE_DESCRIPTOR_LENGTH +
++   	   	          DATA_SET_SUMMARY_LENGTH + UTM_ZONE_OFFSET,
++   	   	          SEEK_SET );
++   	   	int pszUtmZone;
++   	   	READ_CHAR_VAL(pszUtmZone, 4, fpLeader);
++
++   	   	VSIFSeekL( fpLeader, LEADER_FILE_DESCRIPTOR_LENGTH +
++   	   	          DATA_SET_SUMMARY_LENGTH + UTM_HEMISPHERE_OFFSET,
++   	   	          SEEK_SET );
++   	   	int pszUtmHemisphere;
++   	   	bool hemisphereisnorth=false;
++   	   	READ_CHAR_VAL(pszUtmHemisphere, 1, fpLeader);
++   	   	if ( pszUtmHemisphere == 1 ) hemisphereisnorth=true;
++   	   	OGRSpatialReference oSRS;
++   	   	char *pszSRS_WKT = NULL;
++   	   	oSRS.SetProjCS( "UTM" );
++
++#ifdef ALOS_CUSTOM_GEOGRAPHIC_COORDINATE_SYSTEM
++		oSRS.SetGeogCS( "ITRF97 (wgs84 equivalent)",
++		                "International_Terrestrial_Reference_Frame_1997" ,
++		                "GRS 1980",
++		                6378137.0,
++		                298.257222101,
++		                "Greenwich",
++		                0.0,
++		                "degree",
++		                0.0 );
++		oSRS.SetTOWGS84 ( 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  ) ;
++		oSRS.SetAuthority ( "GEOGCS|DATUM" , "EPSG" , 6655    ) ;
++		oSRS.SetAuthority ( "GEOGCS|DATUM|SPHEROID" , "EPSG" , 7019    ) ;
++		oSRS.SetAuthority ( "GEOGCS|PRIMEM" , "EPSG" , 8901    ) ;
++
++#else
++		oSRS.SetWellKnownGeogCS("WGS84");
++#endif //ALOS_CUSTOM_COORDINATE_SYSTEM
++
++   	   	oSRS.SetUTM(pszUtmZone,hemisphereisnorth);
++   	   	oSRS.exportToWkt( &pszSRS_WKT );
++   	   	poDS->SetProjection( pszSRS_WKT );
++   	   	CPLFree( pszSRS_WKT );
++
++
++   	   	/* Extract corner GCPs in kilometers and calculate the affine matrix */
++
++   	   	GDAL_GCP metersgcplist[4];
++   	   	GDALInitGCPs( poDS->nGCPCount, poDS->pasGCPList );
++
++   	   	int i;
++   	   	for (i = 0; i < poDS->nGCPCount; i++) {
++   	   	    char pszID[2];
++   	   	    sprintf( pszID, "%d", i + 1);
++   	   	    metersgcplist[i].pszId = CPLStrdup( pszID );
++   	   	    metersgcplist[i].pszInfo = CPLStrdup( pszID );
++   	   	    metersgcplist[i].dfGCPZ = 0.0;
++   	   	}
++
++   	   	double dfTemp = 0.0;
++   	   	/* seek to start of GCPs */
++   	   	VSIFSeekL( fpLeader, LEADER_FILE_DESCRIPTOR_LENGTH +
++   	   	          DATA_SET_SUMMARY_LENGTH + TOP_LEFT_EASTING_OFFSET, SEEK_SET );
++
++   	   	/* top-left GCP in kilometers */
++   	   	READ_CHAR_FLOAT(dfTemp, 16, fpLeader);
++   	   	metersgcplist[0].dfGCPY = dfTemp * 1000;
++   	   	READ_CHAR_FLOAT(dfTemp, 16, fpLeader);
++   	   	metersgcplist[0].dfGCPX = dfTemp * 1000;
++   	   	metersgcplist[0].dfGCPLine = 0.5;
++   	   	metersgcplist[0].dfGCPPixel = 0.5;
++
++   	   	/* top right GCP in kilometers*/
++   	   	READ_CHAR_FLOAT(dfTemp, 16, fpLeader);
++   	   	metersgcplist[1].dfGCPY = dfTemp * 1000;
++   	   	READ_CHAR_FLOAT(dfTemp, 16, fpLeader);
++   	   	metersgcplist[1].dfGCPX = dfTemp * 1000;
++   	   	metersgcplist[1].dfGCPLine = 0.5;
++   	   	metersgcplist[1].dfGCPPixel = poDS->nRasterXSize - 1.5;
++
++   	   	/* bottom right GCP in kilometers*/
++   	   	READ_CHAR_FLOAT(dfTemp, 16, fpLeader);
++   	   	metersgcplist[2].dfGCPY = dfTemp * 1000;
++   	   	READ_CHAR_FLOAT(dfTemp, 16, fpLeader);
++   	   	metersgcplist[2].dfGCPX = dfTemp * 1000;
++   	   	metersgcplist[2].dfGCPLine = poDS->nRasterYSize - 1.5;
++   	   	metersgcplist[2].dfGCPPixel = poDS->nRasterXSize - 1.5;
++
++   	   	/* bottom left GCP in meters */
++   	   	READ_CHAR_FLOAT(dfTemp, 16, fpLeader);
++   	   	metersgcplist[3].dfGCPY = dfTemp * 1000 ;
++   	   	READ_CHAR_FLOAT(dfTemp, 16, fpLeader);
++   	   	metersgcplist[3].dfGCPX = dfTemp * 1000 ;
++   	   	metersgcplist[3].dfGCPLine = poDS->nRasterYSize - 1.5;
++   	   	metersgcplist[3].dfGCPPixel = 0.5;
++   	   	VSIFCloseL(fpLeader);
++
++		poDS->PamInitialize();
++	  
++   	   	GCPTransformInfo *coefficientsresult = (GCPTransformInfo*)
++   	   	          GDALCreateGCPTransformer( 4 ,  metersgcplist , 1, 0);
++
++   	   	poDS->psPam->adfGeoTransform[0]=coefficientsresult->adfToGeoX[0];
++   	   	poDS->psPam->adfGeoTransform[1]=coefficientsresult->adfToGeoX[1];
++   	   	poDS->psPam->adfGeoTransform[2]=coefficientsresult->adfToGeoX[2];
++   	   	poDS->psPam->adfGeoTransform[3]=coefficientsresult->adfToGeoY[0];
++		poDS->psPam->adfGeoTransform[4]=coefficientsresult->adfToGeoY[1];
++		poDS->psPam->adfGeoTransform[5]=coefficientsresult->adfToGeoY[2];
++		poDS->psPam->bHaveGeoTransform=TRUE;
+     }
+ 
+     VSIFree(pszLeaderFilename);
+diff -cr -N ./frmts/prism/prismdataset.cpp ./frmts/prism/prismdataset.cpp
+*** ./frmts/prism/prismdataset.cpp	Wed Dec 31 21:00:00 1969
+--- ./frmts/prism/prismdataset.cpp	Mon Jul 11 17:10:42 2011
+***************
+*** 0 ****
+--- 1,708 ----
++ /******************************************************************************
++  * $Id: prismdataset.cpp 20996 2010-10-28 18:38:15Z rouault $
++  *
++  * Project:  PRISM imagery reader
++  * Purpose:  Support for PRISM (Based on JAXA PALSAR driver of Philippe Vachon)
++  * Author:   Rodolfo Bonnin <rodolfobonnin@suremptec.com.ar>
++  *
++  ******************************************************************************
++  * Copyright (c) 2011, Rodolfo Bonnin <rodolfobonnin@suremptec.com.ar>
++  *
++  * Permission is hereby granted, free of charge, to any person obtaining a
++  * copy of this software and associated documentation files (the "Software"),
++  * to deal in the Software without restriction, including without limitation
++  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++  * and/or sell copies of the Software, and to permit persons to whom the
++  * Software is furnished to do so, subject to the following conditions:
++  *
++  * The above copyright notice and this permission notice shall be included
++  * in all copies or substantial portions of the Software.
++  *
++  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++  * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++  * DEALINGS IN THE SOFTWARE.
++  ****************************************************************************/
++ 
++ #include "gdal_pam.h"
++ #include "ogr_spatialref.h"
++ #include <gdal.h>
++ #include <gdal_alg.h>
++ 
++ 
++ CPL_CVSID("$Id: prismdataset.cpp ");
++ 
++ CPL_C_START
++ void	GDALRegister_PRISM(void);
++ CPL_C_END
++ 
++ #if defined(WIN32) || defined(WIN32CE)
++ #define SEP_STRING "\\"
++ #else
++ #define SEP_STRING "/"
++ #endif
++ 
++ /* read binary fields */
++ #ifdef CPL_LSB
++ #define READ_WORD(f, x) \
++ 	do { \
++ 		VSIFReadL( &(x), 4, 1, (f) ); \
++ 		(x) = CPL_SWAP32( (x) ); \
++ 	} while (0);
++ #define READ_SHORT(f, x) \
++ 	do { \
++ 		VSIFReadL( &(x), 2, 1, (f) ); \
++ 		(x) = CPL_SWAP16( (x) ); \
++ 	} while (0);
++ #else
++ #define READ_WORD(f, x) do { VSIFReadL( &(x), 4, 1, (f) ); } while (0);
++ #define READ_SHORT(f, x) do { VSIFReadL( &(x), 2, 1, (f) ); } while (0);
++ #endif /* def CPL_LSB */
++ #define READ_BYTE(f, x) do { VSIFReadL( &(x), 1, 1, (f) ); } while (0);
++ 
++ /* read floating point value stored as ASCII */
++ #define READ_CHAR_FLOAT(n, l, f) \
++ 	do {\
++ 		char psBuf[(l+1)]; \
++ 		psBuf[(l)] = '\0'; \
++ 		VSIFReadL( &psBuf, (l), 1, (f) );\
++ 		(n) = CPLAtof( psBuf );\
++ 	} while (0);
++ 
++ /* read numbers stored as ASCII */
++ #define READ_CHAR_VAL(x, n, f) \
++ 	do { \
++ 		char psBuf[(n+1)]; \
++ 		psBuf[(n)] = '\0';\
++ 		VSIFReadL( &psBuf, (n), 1, (f) ); \
++ 		(x) = atoi(psBuf); \
++ 	} while (0);
++ 
++ /* read string fields 
++  * note: string must be size of field to be extracted + 1
++  */
++ #define READ_STRING(s, n, f) \
++ 	do { \
++ 		VSIFReadL( &(s), 1, (n), (f) ); \
++ 		(s)[(n)] = '\0'; \
++ 	} while (0);
++ 
++ /*************************************************************************/
++ 
++ 
++ /* some image option descriptor records */
++ 
++ 
++ #define IMAGE_DATA_OFFSET_OFFSET 186
++ #define IMAGE_DATA_OFFSET_LENGTH 6
++ #define IMAGE_DATA_NAN_TOTAL_OFFSET 128
++ #define IMAGE_DATA_NAN_SIDE_OFFSET 64
++ #define LINES_PER_BAND_OFFSET 180
++ #define LINES_PER_BAND_LENGHT 6
++ #define RECORD_LENGHT_OFFSET 186
++ #define RECORD_LENGHT_LENGHT 6
++ #define PRODUCT_LEVEL_OFFSET 387
++ #define PRODUCT_LEVEL_LENGHT 1
++ #define PRODUCT_GEOCODING_OFFSET 1468
++ #define PRODUCT_GEOCODING_LENGHT 1
++ #define IMAGE_OPT_DESC_LENGTH 720
++ 
++ /* metadata to be extracted from the leader file */
++ #define LEADER_FILE_DESCRIPTOR_LENGTH 4680
++ #define TOP_LEFT_EASTING_OFFSET 1732
++ #define DATA_SET_SUMMARY_LENGTH 4680
++ 
++ /* relative to leader file descriptor + dataset summary length */
++ #define ALPHANUMERIC_PROJECTION_NAME_OFFSET 412
++ #define UTM_ZONE_OFFSET 96
++ #define UTM_HEMISPHERE_OFFSET 95
++ 
++ /* a few useful enums */
++ enum eFileType {
++ 	level_1A = 0,
++ 	level_1B1,
++ 	level_1B2R,
++ 	level_1B2G
++ };
++ 
++ 
++ 
++ /************************************************************************/
++ /* ==================================================================== */
++ /*                        PRISMDataset                             */
++ /* ==================================================================== */
++ /************************************************************************/
++ 
++ class PRISMRasterBand;
++ 
++ class PRISMDataset : public GDALPamDataset {
++     friend class PRISMRasterBand;
++ private:
++     GDAL_GCP *pasGCPList;
++     int nGCPCount;
++     eFileType nFileType;
++     double adfGeoTransform[6];
++     char *pszProjection;
++ public:
++     PRISMDataset();
++     ~PRISMDataset();
++ 
++     int GetGCPCount();
++     const GDAL_GCP *GetGCPs();
++ 
++     static GDALDataset *Open( GDALOpenInfo *poOpenInfo );
++     static int Identify( GDALOpenInfo *poOpenInfo );
++     static void ReadMetadata( PRISMDataset *poDS, VSILFILE *fp );
++     CPLErr GetGeoTransform(double * padfTransform );
++     const char* GetProjectionRef();
++     const char * GetGCPProjection();
++ };
++ 
++ PRISMDataset::PRISMDataset()
++ {
++    pasGCPList = NULL;
++    nGCPCount = 0;
++    adfGeoTransform[0] = 0.0;
++    adfGeoTransform[1] = 1.0;
++    adfGeoTransform[2] = 0.0;
++    adfGeoTransform[3] = 0.0;
++    adfGeoTransform[4] = 0.0;
++    adfGeoTransform[5] = 1.0;
++    pszProjection = NULL;
++ }
++ 
++ PRISMDataset::~PRISMDataset()
++ {
++    if( nGCPCount > 0 )
++    {
++        GDALDeinitGCPs( nGCPCount, pasGCPList );
++        CPLFree( pasGCPList );
++    }
++ }
++ 
++ /************************************************************************/
++ /* ==================================================================== */
++ /*                        PRISMRasterBand                          */
++ /* ==================================================================== */
++ /************************************************************************/
++ 
++ class PRISMRasterBand : public GDALRasterBand {
++     VSILFILE *fp;
++     VSILFILE *fpList[8];
++     int nRasterXSize;
++     int nRasterYSize;
++ 
++     eFileType nFileType;
++     int nBitsPerSample;
++     int nSamplesPerGroup;
++     int nProductLevel;
++     int nRecordSize;
++     int nObservationMode;
++     int nfileNum;
++     int nImageDataOffset;
++ 
++ 
++ public:
++     PRISMRasterBand( PRISMDataset *poDS, int nFiles, VSILFILE *fp[8] );
++     ~PRISMRasterBand();
++ 
++     CPLErr IReadBlock( int nBlockXOff, int nBlockYOff, void *pImage );
++ };
++ 
++ /************************************************************************/
++ /*                         PRISMRasterBand()                       */
++ /************************************************************************/
++ 
++ PRISMRasterBand::PRISMRasterBand( PRISMDataset *poDS,
++ 	int nFiles, VSILFILE *fp[8] )
++ {
++     this->fp = fp[0];
++     nfileNum=nFiles;
++     for ( int i = 0 ; i < 8 ; ++i){
++    	 fpList[i]=fp[i];
++     }
++ 
++     eDataType = GDT_Byte;
++ 
++     /* Read image data offset */
++ 
++     VSIFSeekL( fp[0], IMAGE_DATA_OFFSET_OFFSET, SEEK_SET );
++     READ_CHAR_VAL( nImageDataOffset ,  IMAGE_DATA_OFFSET_LENGTH , fp[0] );
++ 
++    /* Read lines per band and record lenght */
++ 
++     VSIFSeekL( fp[0], LINES_PER_BAND_OFFSET, SEEK_SET );
++     READ_CHAR_VAL( nRasterYSize ,  LINES_PER_BAND_LENGHT , fp[0] );
++ 
++     VSIFSeekL( fp[0], RECORD_LENGHT_OFFSET, SEEK_SET );
++     READ_CHAR_VAL( nRasterXSize ,  RECORD_LENGHT_LENGHT , fp[0] );
++ 
++     if ((nFileType!=level_1B2R) ||(nFileType!=level_1B2G)) nRasterXSize -= IMAGE_DATA_NAN_TOTAL_OFFSET;
++ 
++  	 poDS->nRasterXSize = nRasterXSize * nfileNum ;
++  	 poDS->nRasterYSize = nRasterYSize;
++ 
++     /* size of block we can read */
++     nBlockXSize = nRasterXSize   ;
++     nBlockYSize = 1;
++ 
++     /* set the file pointer to the first SAR data record */
++     VSIFSeekL( fp[0], IMAGE_OPT_DESC_LENGTH, SEEK_SET );
++ }	
++ 
++ /************************************************************************/
++ /*                        ~PRISMRasterBand()                       */
++ /************************************************************************/
++ 
++ PRISMRasterBand::~PRISMRasterBand()
++ {
++     if (fp)
++         VSIFCloseL(fp);
++ 
++ }
++ 
++ /************************************************************************/
++ /*                             IReadBlock()                             */
++ /************************************************************************/
++ 
++ CPLErr PRISMRasterBand::IReadBlock( int nBlockXOff, int nBlockYOff,
++ 	void *pImage )
++ {
++ 
++ 	int fileOffset;
++ 	if ((nFileType!=level_1B2R ||nFileType!=level_1B2G)){
++ 		fileOffset=nBlockYOff*(nRasterXSize  + IMAGE_DATA_NAN_TOTAL_OFFSET ) +
++          IMAGE_DATA_NAN_SIDE_OFFSET;
++ 	}
++ 	else{
++ 		fileOffset=nBlockYOff*(nRasterXSize ) ;
++ 	}
++     VSIFSeekL( fpList[nBlockXOff], nImageDataOffset + fileOffset , SEEK_SET );
++     VSIFReadL( pImage  , 1 , (nRasterXSize   ), fpList[nBlockXOff] );
++     return CE_None;
++ }
++ 
++ 
++ /************************************************************************/
++ /* ==================================================================== */
++ /*                             PRISMDataset			     						*/
++ /* ==================================================================== */
++ /************************************************************************/
++ 
++ /************************************************************************/
++ /*                          GetGCPCount()                              */
++ /************************************************************************/
++ 
++ int PRISMDataset::GetGCPCount() {
++    if (nFileType==level_1B2R)
++    	return nGCPCount;
++    else
++    	return 0;
++ }
++ 
++ 
++ /************************************************************************/
++ /*                             GetGCPs()                                */
++ /************************************************************************/
++ 
++ const GDAL_GCP *PRISMDataset::GetGCPs() {
++    if (nFileType==level_1B2R)
++     return pasGCPList;
++    else
++    	return NULL;
++ }
++ 
++ 
++ /************************************************************************/
++ /*                             GetGCPProjection()                       */
++ /************************************************************************/
++ 
++ 
++ const char * PRISMDataset::GetGCPProjection() {
++ 
++ 	if (nFileType==level_1B2R)
++ 		return pszProjection;
++ 	else
++ 		return "";
++ }
++ 
++ /************************************************************************/
++ /*                          GetProjectionRef()                          */
++ /************************************************************************/
++ 
++ const char *PRISMDataset::GetProjectionRef()
++ 
++ {
++ 	if (nFileType==level_1B2G  || nFileType==level_1B2R )
++         return pszProjection;
++ 	else
++ 		return "";
++ 
++ }
++ 
++ /************************************************************************/
++ /*                            ReadMetadata()                            */
++ /************************************************************************/
++ 
++ void PRISMDataset::ReadMetadata( PRISMDataset *poDS, VSILFILE *fp ) {
++ 
++         /* Alphanumeric projection name */
++         VSIFSeekL( fp, LEADER_FILE_DESCRIPTOR_LENGTH +
++                   DATA_SET_SUMMARY_LENGTH + ALPHANUMERIC_PROJECTION_NAME_OFFSET,
++                   SEEK_SET );
++         char pszProjName[33];
++         READ_STRING(pszProjName, 32, fp);
++         poDS->SetMetadataItem( "PROJECTION_NAME", pszProjName );
++ 		
++ }
++ 
++ /************************************************************************/
++ /*                              Identify()                              */
++ /************************************************************************/
++ 
++ int PRISMDataset::Identify( GDALOpenInfo *poOpenInfo ) {
++     if ( poOpenInfo->fp == NULL || poOpenInfo->nHeaderBytes < 360 )
++         return 0;
++ 
++     /* First, check that this is a PRISM image indeed */
++     if ( !EQUALN((char *)(poOpenInfo->pabyHeader + 60),"AL", 2) 
++          || !EQUALN(CPLGetBasename((char *)(poOpenInfo->pszFilename)) + 4, 
++                     "ALPSM", 5) )
++     {
++         return 0;
++     }
++ 
++     VSILFILE *fpL = VSIFOpenL( poOpenInfo->pszFilename, "r" );
++     if( fpL == NULL )
++         return FALSE;
++ 
++     /* Check that this is a volume directory file */
++     int nRecordSeq = 0;
++     int nRecordSubtype = 0;
++     int nRecordType = 0;
++     int nSecondSubtype = 0;
++     int nThirdSubtype = 0;
++     int nLengthRecord = 0;
++ 
++     VSIFSeekL(fpL, 0, SEEK_SET);
++ 
++     READ_WORD(fpL, nRecordSeq);
++     READ_BYTE(fpL, nRecordSubtype);
++     READ_BYTE(fpL, nRecordType);
++     READ_BYTE(fpL, nSecondSubtype);
++     READ_BYTE(fpL, nThirdSubtype);
++     READ_WORD(fpL, nLengthRecord);
++ 
++     VSIFCloseL( fpL );
++ 
++     /* Check that we have the right record */
++     if ( nRecordSeq == 1 && nRecordSubtype == 192 && nRecordType == 192 &&
++          nSecondSubtype == 18 && nThirdSubtype == 18 && nLengthRecord == 360 )
++     {
++         return 1;
++     }
++ 
++     return 0;
++ }
++ 
++ /************************************************************************/
++ /*                                Open()                                */
++ /************************************************************************/
++ GDALDataset *PRISMDataset::Open( GDALOpenInfo * poOpenInfo ) {
++     /* Check that this actually is a PRISM product */
++     if ( !PRISMDataset::Identify(poOpenInfo) )
++         return NULL;
++         
++ /* -------------------------------------------------------------------- */
++ /*      Confirm the requested access is supported.                      */
++ /* -------------------------------------------------------------------- */
++     if( poOpenInfo->eAccess == GA_Update )
++     {
++         CPLError( CE_Failure, CPLE_NotSupported, 
++                   "The ALOS PRISM driver does not support update access to existing"
++                   " datasets.\n" );
++         return NULL;
++     }
++     
++     PRISMDataset *poDS = new PRISMDataset();
++ 
++ 
++     /* Read image options record to determine the type of data */
++ 
++     int nProductLevel;
++     eFileType tempFileType;
++ 
++     VSILFILE *fpL = VSIFOpenL( poOpenInfo->pszFilename, "r" );
++     if( fpL == NULL )
++         return FALSE;
++  /* Read product level */
++     VSIFSeekL( fpL , PRODUCT_LEVEL_OFFSET, SEEK_SET );
++     READ_CHAR_VAL( nProductLevel,  PRODUCT_LEVEL_LENGHT , fpL );
++ 
++     /*Read product geocoding */
++ 
++     char geocoding[2];
++     VSIFSeekL( fpL , PRODUCT_GEOCODING_OFFSET, SEEK_SET );
++     READ_STRING( geocoding , 1, fpL );
++ 
++     VSIFCloseL(fpL);
++ 
++     switch (nProductLevel){
++    	 case 0:
++    		 tempFileType=level_1A;
++    		 break;
++    	 case 1:
++    		 tempFileType=level_1B1;
++    		 break;
++    	 case 2:
++    		 if (geocoding[0]=='R')
++    			 tempFileType=level_1B2R;
++    		 else
++    			 tempFileType=level_1B2G;
++    		 break;
++     };
++ 
++     poDS->nFileType = tempFileType;
++ 
++     /* Get the suffix of the filename, we'll need this */
++     char *pszSuffix = VSIStrdup( (char *)
++                                  (CPLGetFilename( poOpenInfo->pszFilename ) + 3) );
++ 
++     /* Try to read each of CCDs */
++     char *pszImgFile = (char *)VSIMalloc( 
++         strlen( CPLGetDirname( poOpenInfo->pszFilename ) ) + 
++         strlen( pszSuffix ) + 8 );
++ 
++     int nBandNum = 1;
++     int nFileNum = 0;
++     int nTotalFiles;
++ 
++      VSILFILE *fpList[8];
++ 
++      if ((nProductLevel==level_1B2R ||nProductLevel==level_1B2G) ) nTotalFiles=1;
++      else nTotalFiles = 6 ;
++      /* Read all CCDs */
++      for ( int iband=1 ; iband < nTotalFiles + 1 ; iband ++) {
++    	  if ((nProductLevel==level_1B2R ||nProductLevel==level_1B2G)){
++            sprintf( pszImgFile, "%s%sIMG%s",
++                     CPLGetDirname(poOpenInfo->pszFilename), SEP_STRING,
++                     pszSuffix );
++    	  }
++    	  else {
++            sprintf( pszImgFile, "%s%sIMG-0%i%s",
++                     CPLGetDirname(poOpenInfo->pszFilename), SEP_STRING,
++                     iband, pszSuffix );
++    	  }
++     fpList[nFileNum] = VSIFOpenL( pszImgFile, "rb" );
++     if (fpList[nFileNum] != NULL) {
++          nFileNum++;
++      }
++      }
++ 
++     VSIFree( pszImgFile );
++ 
++     /* did we get at least one band? */
++     if (fpList[0] == NULL  ) {
++         CPLError( CE_Failure, CPLE_AppDefined,
++                   "Unable to find any image data. Aborting opening as "
++                   "PRISM image.");
++         delete poDS;
++         return NULL;
++     }
++ 
++         poDS->SetBand( 1 , new PRISMRasterBand( poDS, nFileNum , fpList ) );
++ 
++     /* read metadata from Leader file. */
++     char *pszLeaderFilename = (char *)VSIMalloc( 
++         strlen( CPLGetDirname( poOpenInfo->pszFilename ) ) + 
++         strlen(pszSuffix) + 5 );
++     sprintf( pszLeaderFilename, "%s%sLED%s", 
++              CPLGetDirname( poOpenInfo->pszFilename ) , SEP_STRING, pszSuffix );
++ 
++     int pszUtmHemisphere;
++     bool hemisphereisnorth=false;
++     int pszUtmZone;
++     VSILFILE *fpLeader = VSIFOpenL( pszLeaderFilename, "rb" );
++ 
++     /* check if the leader is actually present and the formats has a
++      * coordinate system */
++     if ( (fpLeader) != NULL && ((nProductLevel==level_1B2R ||nProductLevel==level_1B2G) ) ) {
++         ReadMetadata(poDS, fpLeader);
++ 
++ 			 /* UTM ZONE */
++ 		VSIFSeekL( fpLeader, LEADER_FILE_DESCRIPTOR_LENGTH +
++ 					 DATA_SET_SUMMARY_LENGTH + UTM_ZONE_OFFSET,
++ 					 SEEK_SET );
++ 		READ_CHAR_VAL(pszUtmZone, 2, fpLeader);
++ 
++ 			/* UTM HEMISPHERE  */
++ 		VSIFSeekL( fpLeader, LEADER_FILE_DESCRIPTOR_LENGTH +
++ 					 DATA_SET_SUMMARY_LENGTH + UTM_HEMISPHERE_OFFSET,
++ 					 SEEK_SET );
++ 		READ_CHAR_VAL(pszUtmHemisphere, 1, fpLeader);
++ 		if ( pszUtmHemisphere == 0 ) hemisphereisnorth=true;
++ 
++ 		/*  Create the spatial reference  */
++ 		OGRSpatialReference oSRS , *originCornerSRS, destinationCornerSRS ;
++ 
++ 
++ 
++ 		oSRS.SetProjCS("UTM");
++ 		oSRS.SetWellKnownGeogCS("WGS84") ;
++ 		oSRS.SetUTM(pszUtmZone,hemisphereisnorth);
++ 
++ #ifdef ALOS_CUSTOM_GEOGRAPHIC_COORDINATE_SYSTEM
++ 		oSRS.SetGeogCS( "ITRF97 (wgs84 equivalent)",
++ 		                "International_Terrestrial_Reference_Frame_1997" ,
++ 		                "GRS 1980",
++ 		                6378137.0,
++ 		                298.257222101,
++ 		                "Greenwich",
++ 		                0.0,
++ 		                "degree",
++ 		                0.0 );
++ 		oSRS.SetTOWGS84 ( 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  ) ;
++ 		oSRS.SetAuthority ( "GEOGCS|DATUM" , "EPSG" , 6655    ) ;
++ 		oSRS.SetAuthority ( "GEOGCS|DATUM|SPHEROID" , "EPSG" , 7019    ) ;
++ 		oSRS.SetAuthority ( "GEOGCS|PRIMEM" , "EPSG" , 8901    ) ;
++ 
++ #else
++ 		oSRS.SetWellKnownGeogCS("WGS84");
++ #endif //ALOS_CUSTOM_COORDINATE_SYSTEM
++ 
++ 		originCornerSRS=oSRS.CloneGeogCS();
++ 
++ 
++ 
++ 		/* Create the coordinate transformation */
++ 		OGRCoordinateTransformation *coordTransform;
++ 		coordTransform=OGRCreateCoordinateTransformation(  originCornerSRS   , &oSRS   );
++ 
++ 	   if ( coordTransform!=NULL ) {
++ 
++     /* Extract corner points in grads, transform them into meters, and calculate
++      * the affine matrix */
++ 
++     double latToProject, longToProject;
++ 
++     poDS->nGCPCount = 4;
++     GDAL_GCP gcplist[poDS->nGCPCount];
++     poDS->pasGCPList = (GDAL_GCP *)CPLCalloc( sizeof(GDAL_GCP),
++                                                   poDS->nGCPCount );
++     GDALInitGCPs( poDS->nGCPCount, poDS->pasGCPList );
++ 
++     for (int i = 0; i < poDS->nGCPCount; i++) {
++         char pszID[2];
++         sprintf( pszID, "%d", i + 1);
++         gcplist[i].pszId = CPLStrdup( pszID );
++         gcplist[i].pszInfo = CPLStrdup( pszID );
++         gcplist[i].dfGCPZ = 0.0;
++     }
++ 
++ 	 /* seek to start of corner points */
++ 
++ 	 VSIFSeekL( fpLeader, LEADER_FILE_DESCRIPTOR_LENGTH +
++ 			 TOP_LEFT_EASTING_OFFSET, SEEK_SET );
++ 
++ 	 /* Fill all corner projected coordinates */
++ 
++ 	 for ( int iCorner=0; iCorner < poDS->nGCPCount; ++iCorner ){
++ 		 READ_CHAR_FLOAT(latToProject, 16, fpLeader);
++ 		 READ_CHAR_FLOAT(longToProject, 16, fpLeader);
++ 
++ 		 coordTransform->Transform( 1,  &longToProject   , &latToProject );
++ 
++ 	    poDS->pasGCPList[iCorner].dfGCPY = latToProject;
++ 	    poDS->pasGCPList[iCorner].dfGCPX = longToProject;
++ 
++ 
++ 		 gcplist[iCorner].dfGCPY = latToProject;
++ 		 gcplist[iCorner].dfGCPX = longToProject;
++ 	 }
++ 
++ 	 /* Fill the pixel and lines of the corners */
++ 
++ 	 gcplist[0].dfGCPLine = 0.5;
++ 	 gcplist[0].dfGCPPixel = 0.5;
++ 	 gcplist[1].dfGCPLine = 0.5;
++ 	 gcplist[1].dfGCPPixel = poDS->nRasterXSize - 0.5;
++ 	 gcplist[2].dfGCPLine = poDS->nRasterYSize - 0.5;
++ 	 gcplist[2].dfGCPPixel = 0.5;
++ 	 gcplist[3].dfGCPLine = poDS->nRasterYSize - 0.5;
++ 	 gcplist[3].dfGCPPixel = poDS->nRasterXSize - 0.5;
++ 
++ 	 poDS->pasGCPList[0].dfGCPLine = 0.0;
++ 	 poDS->pasGCPList[0].dfGCPPixel = 0.0;
++ 	 poDS->pasGCPList[1].dfGCPLine = 0.5;
++ 	 poDS->pasGCPList[1].dfGCPPixel = poDS->nRasterXSize - 0.5;
++ 	 poDS->pasGCPList[2].dfGCPLine = poDS->nRasterYSize - 0.5;
++ 	 poDS->pasGCPList[2].dfGCPPixel = 0.5;
++ 	 poDS->pasGCPList[3].dfGCPLine = poDS->nRasterYSize - 0.5;
++ 	 poDS->pasGCPList[3].dfGCPPixel = poDS->nRasterXSize - 0.5;
++ 
++ 
++ 
++ 			/* Calculate the affine transform */
++ 
++ 	 GDALGCPsToGeoTransform(4 , gcplist , poDS->adfGeoTransform , 1 );
++ 
++ 	char *pszSRS_WKT = NULL;
++ 	oSRS.exportToWkt( &pszSRS_WKT );
++ 	poDS->SetProjection( pszSRS_WKT );
++ 
++ 	oSRS.exportToWkt( &(poDS->pszProjection) );
++ 
++ 	CPLFree( pszSRS_WKT );
++ 	VSIFCloseL(fpLeader);
++ 	VSIFree(pszLeaderFilename);
++ 	VSIFree( pszSuffix );
++ 
++ }
++ 
++ }
++ /* -------------------------------------------------------------------- */
++ /*      Initialize any PAM information.                                 */
++ /* -------------------------------------------------------------------- */
++     poDS->SetDescription( poOpenInfo->pszFilename );
++     poDS->TryLoadXML();
++ 
++ /* -------------------------------------------------------------------- */
++ /*      Check for overviews.                                            */
++ /* -------------------------------------------------------------------- */
++     poDS->oOvManager.Initialize( poDS, poOpenInfo->pszFilename );
++     return poDS;
++ }
++ 
++ 
++ 
++ CPLErr PRISMDataset::GetGeoTransform(double * padfTransform )
++ {
++ if (nFileType==level_1A | nFileType==level_1B1 ) {
++ 	return CE_Failure;
++ }
++ else{
++ 	memcpy( padfTransform, adfGeoTransform, sizeof(double)*6 );
++ 	return CE_None;
++ }
++ }
++ 
++ /************************************************************************/
++ /*                      GDALRegister_PRISM()                       */
++ /************************************************************************/
++ 
++ void GDALRegister_PRISM() {
++     GDALDriver	*poDriver;
++ 
++     if( GDALGetDriverByName( "PRISM" ) == NULL ) {
++         poDriver = new GDALDriver();
++         poDriver->SetDescription( "PRISM" );
++         poDriver->SetMetadataItem( GDAL_DMD_LONGNAME, 
++                                    "ALOS PRISM Product Reader (Level 1A/1B2)" );
++         poDriver->pfnOpen = PRISMDataset::Open;
++         poDriver->pfnIdentify = PRISMDataset::Identify;
++         GetGDALDriverManager()->RegisterDriver( poDriver );
++     }
++ }
+diff -Nur ./frmts/prism/GNUmakefile ./frmts/prism/GNUmakefile
+--- ./frmts/prism/GNUmakefile	1969-12-31 21:00:00.000000000 -0300
++++ ./frmts/prism/GNUmakefile	2012-06-05 15:28:24.250976487 -0300
+@@ -0,0 +1,15 @@
++
++include ../../GDALmake.opt
++
++OBJ	=	prismdataset.o
++
++CPPFLAGS	:=	$(GDAL_INCLUDE) $(CPPFLAGS) $(XTRA_OPT)
++
++default:	$(OBJ:.o=.$(OBJ_EXT))
++
++clean:
++	rm -f *.o
++
++all:	$(OBJ:.o=.$(OBJ_EXT))
++
++install-obj:	$(O_OBJ:.o=.$(OBJ_EXT))
+diff -Nur ./frmts/prism/makefile.vc ./frmts/prism/makefile.vc
+--- ./frmts/prism/makefile.vc	1969-12-31 21:00:00.000000000 -0300
++++ ./frmts/prism/makefile.vc	2012-06-05 15:28:25.850904705 -0300
+@@ -0,0 +1,13 @@
++
++OBJ	=	prismdataset.obj
++
++GDAL_ROOT	=	..\..
++
++!INCLUDE $(GDAL_ROOT)\nmake.opt
++
++default:	$(OBJ)
++	xcopy /D  /Y *.obj ..\o
++
++clean:
++	-del *.obj
++
+diff -cr -N ./gcore/gdal_frmts.h ./gcore/gdal_frmts.h
+*** ./gcore/gdal_frmts.h	Fri Jan 14 02:19:05 2011
+--- ./gcore/gdal_frmts.h	Mon Jul  4 09:36:37 2011
+@@ -133,6 +133,8 @@
+ void CPL_DLL GDALRegister_INGR(void);
+ void CPL_DLL GDALRegister_ERS(void);
+ void CPL_DLL GDALRegister_PALSARJaxa(void);
++void CPL_DLL GDALRegister_PRISM(void);
++void CPL_DLL GDALRegister_AVNIR2(void);
+ void CPL_DLL GDALRegister_DIMAP();
+ void CPL_DLL GDALRegister_GFF(void);
+ void CPL_DLL GDALRegister_COSAR(void);

@@ -1,0 +1,28 @@
+--- ./ogr/ogrsf_frmts/libkml/ogrlibkmldatasource.cpp	2012-05-17 00:30:52 -0300
++++ ./ogr/ogrsf_frmts/libkml/ogrlibkmldatasource.cpp	2012-06-04 08:52:45 -0300
+@@ -30,6 +30,7 @@
+ //#include "cpl_conv.h"
+ //#include "cpl_string.h"
+ //#include "cpl_error.h"
++#include "cpl_vsi.h"
+ #include <iostream>
+ //#include <sstream>
+ #include <kml/dom.h>
+@@ -1453,7 +1454,7 @@
+ 
+     /***** dir *****/
+ 
+-    VSIStatBufL sStatBuf = { };
++    VSIStatBufL sStatBuf;
+     if ( !VSIStatExL ( pszFilename, &sStatBuf, VSI_STAT_NATURE_FLAG ) &&
+          VSI_ISDIR ( sStatBuf.st_mode ) )
+         return OpenDir ( pszFilename, bUpdate );
+@@ -2059,7 +2060,7 @@
+         const char *pszFilePath =
+             CPLFormFilename ( pszName, papoLayers[iLayer]->GetFileName (  ),
+                               NULL );
+-        VSIStatBufL oStatBufL = { };
++        VSIStatBufL oStatBufL;
+         if ( !VSIStatL ( pszFilePath, &oStatBufL ) ) {
+             if ( VSIUnlink ( pszFilePath ) ) {
+                 CPLError ( CE_Failure, CPLE_AppDefined,

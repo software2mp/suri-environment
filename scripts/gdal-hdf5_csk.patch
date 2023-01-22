@@ -1,0 +1,90 @@
+--- frmts/hdf5/hdf5dataset.cpp	2011-07-13 17:17:22 -0300
++++ frmts/hdf5/hdf5dataset.cpp	2011-07-13 17:53:19 -0300
+@@ -38,6 +38,7 @@
+ #include "gdal_priv.h"
+ #include "cpl_string.h"
+ #include "hdf5dataset.h"
++#include <ogr_spatialref.h>
+ 
+ CPL_CVSID("$Id: hdf5dataset.cpp 23068 2011-09-06 20:50:23Z antonio $");
+ 
+@@ -620,21 +621,7 @@ herr_t HDF5AttrIterate( hid_t hH5ObjID, 
+ 
+     poDS = (HDF5Dataset *) pDS;
+ 
+-    // Convert "/" into "_" for the path component
+-    const char* pszPath = poDS->poH5CurrentObject->pszUnderscorePath;
+-    if(pszPath != NULL && strlen(pszPath) > 0)
+-    {
+-        papszTokens = CSLTokenizeString2( pszPath, "/", CSLT_HONOURSTRINGS );
++   osKey = HDF5ReplaceGroupSeparators(poDS->poH5CurrentObject->pszUnderscorePath);
+-
+-        for( int i = 0; papszTokens != NULL && papszTokens[i] != NULL; ++i )
+-        {
+-            if( i != 0)
+-                osKey += '_';
+-            osKey += papszTokens[i];
+-        }
+-        CSLDestroy( papszTokens );
+-    }
+-
+     // Convert whitespaces into "_" for the attribute name component
+     papszTokens = CSLTokenizeString2( pszAttrName, " ",
+                             CSLT_STRIPLEADSPACES | CSLT_STRIPENDSPACES );
+@@ -1066,3 +1052,28 @@ CPLErr HDF5Dataset::ReadGlobalAttributes
+     HDF5ListGroupObjects( poRootGroup, bSUBDATASET );
+     return CE_None;
+ }
++
++char *HDF5ReplaceGroupSeparators(const char * pszPath)
++{
++   char          **papszTokens;
++   CPLString       osKey;
++
++   // Convert "/" into "_" fro the path component
++   //const char* pszPath = poDS->poH5CurrentObject->pszUnderscorePath;
++
++	if(pszPath != NULL && strlen(pszPath) > 0)
++   {
++	papszTokens = CSLTokenizeString2( pszPath, "/", CSLT_HONOURSTRINGS );
++
++	for( int i = 0; papszTokens != NULL && papszTokens[i] != NULL; ++i )
++	{
++	    if( i != 0)
++		osKey += HDF5_INTERAL_GROUP_SEPARATOR;
++	    osKey += papszTokens[i];
++	}
++	CSLDestroy( papszTokens );
++   }
++
++   return CPLStrdup(osKey);
++}
++
+--- frmts/hdf5/hdf5dataset.h	2011-07-13 17:17:22 -0300
++++ frmts/hdf5/hdf5dataset.h	2011-06-22 10:18:09 -0300
+@@ -32,6 +32,7 @@
+ 
+ #include "gdal_pam.h"
+ #include "cpl_list.h"
++#define HDF5_INTERAL_GROUP_SEPARATOR '_'
+ 
+ typedef struct HDF5GroupObjects {
+   char         *pszName;
+@@ -80,7 +81,7 @@ class HDF5Dataset : public GDALPamDatase
+ 
+   HDF5GroupObjects* HDF5FindDatasetObjects( HDF5GroupObjects *, const char * );
+   HDF5GroupObjects* HDF5FindDatasetObjectsbyPath( HDF5GroupObjects *, const char * );
+-  char* CreatePath(HDF5GroupObjects *);
++
+   void DestroyH5Objects(HDF5GroupObjects *);
+ 
+   GDALDataType GetDataType(hid_t);
+@@ -97,6 +99,8 @@ class HDF5Dataset : public GDALPamDatase
+   static GDALDataset *Open(GDALOpenInfo *);
+   static int Identify(GDALOpenInfo *);
+ };
++
++char *HDF5ReplaceGroupSeparators(const char *);
+ 
+ 
+ 

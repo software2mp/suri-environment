@@ -1,0 +1,11 @@
+--- ./alg/gdal_crs.c	Wed Dec 31 21:00:00 1969
++++ ./alg/gdal_crs.c	Fri Apr  8 12:09:10 2011
+@@ -74,7 +74,7 @@
+ 
+ CPL_C_END
+ 
+-#define MAXORDER 3
++#define MAXORDER 4
+ 
+ struct Control_Points
+ {

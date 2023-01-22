@@ -1,0 +1,257 @@
+Index: frmts/gtiff/gt_wkt_srs.cpp
+===================================================================
+--- frmts/gtiff/gt_wkt_srs.cpp	(revision 21411)
++++ frmts/gtiff/gt_wkt_srs.cpp	(working copy)
+@@ -683,15 +683,11 @@
+             break;
+ 
+           case CT_Mercator:
+-            oSRS.SetMercator( adfParm[0], adfParm[1],
+-                              adfParm[4],
+-                              adfParm[5], adfParm[6] );
++            if (psDefn->Projection == 1024 || psDefn->Projection == 9841) // WebMercator / Pseudo-Mercator Aux Sphere. 
++               oSRS.SetMercatorAuxSphere( adfParm[0], adfParm[1], adfParm[5], adfParm[6] );
++            else
++			   oSRS.SetMercator( adfParm[0], adfParm[1], adfParm[4], adfParm[5], adfParm[6] );
+                               
+-            if (psDefn->Projection == 1024 || psDefn->Projection == 9841) // override hack for google mercator. 
+-            {
+-                oSRS.SetExtension( "PROJCS", "PROJ4",  
+-                                   "+proj=merc +a=6378137 +b=6378137 +lat_ts=0.0 +lon_0=0.0 +x_0=0.0 +y_0=0 +k=1.0 +units=m +nadgrids=@null +wktext  +no_defs" ); 
+-            }
+             break;
+ 
+           case CT_ObliqueStereographic:
+@@ -1465,7 +1461,6 @@
+         GTIFKeySet(psGTIF, ProjFalseNorthingGeoKey, TYPE_DOUBLE, 1,
+                    poSRS->GetProjParm( SRS_PP_FALSE_NORTHING, 0.0 ) );
+     }
+-    
+     else if( EQUAL(pszProjection,SRS_PT_OBLIQUE_STEREOGRAPHIC) )
+     {
+         GTIFKeySet(psGTIF, GTModelTypeGeoKey, TYPE_SHORT, 1,
+@@ -2248,16 +2243,16 @@
+                       poSRS->GetAttrValue("DATUM") );
+         }
+ 
++
+         /* Always set InvFlattening if it is avaliable.  */
+         /* So that it doesn'tneed to calculate from SemiMinor */
+         if( dfInvFlattening != 0.0 )
+-            GTIFKeySet( psGTIF, GeogInvFlatteningGeoKey, TYPE_DOUBLE, 1,
+-                        dfInvFlattening );
++           GTIFKeySet( psGTIF, GeogInvFlatteningGeoKey, TYPE_DOUBLE, 1,
++           dfInvFlattening );
+         /* Always set SemiMajor to keep the precision and in case of editing */
+         if( dfSemiMajor != 0.0 )
+-            GTIFKeySet( psGTIF, GeogSemiMajorAxisGeoKey, TYPE_DOUBLE, 1,
+-                        dfSemiMajor );
+-
++           GTIFKeySet( psGTIF, GeogSemiMajorAxisGeoKey, TYPE_DOUBLE, 1,
++           dfSemiMajor );
+         if( nGCS == KvUserDefined 
+             && CSLTestBoolean( CPLGetConfigOption("GTIFF_ESRI_CITATION",
+                                                   "YES") ) )
+Index: ogr/ogr_fromepsg.cpp
+===================================================================
+--- ogr/ogr_fromepsg.cpp	(revision 21411)
++++ ogr/ogr_fromepsg.cpp	(working copy)
+@@ -1482,17 +1482,19 @@
+         break;
+ 
+       case 9804:
+-      case 9841: /* Mercator 1SP (Spherical) */
+-      case 1024: /* Google Mercator */
+         poSRS->SetMercator( OGR_FP( NatOriginLat ), OGR_FP( NatOriginLong ),
+                             OGR_FP( NatOriginScaleFactor ), 
+                             OGR_FP( FalseEasting ), OGR_FP( FalseNorthing ) );
+-
+-        if( nProjMethod == 1024 || nProjMethod == 9841 ) // override hack for google mercator.
+-        {
+-            poSRS->SetExtension( "PROJCS", "PROJ4", 
+-                                 "+proj=merc +a=6378137 +b=6378137 +lat_ts=0.0 +lon_0=0.0 +x_0=0.0 +y_0=0 +k=1.0 +units=m +nadgrids=@null +wktext  +no_defs" );
+-        }
++		break;
++      case 9841: /* Mercator 1SP (Spherical) */
++      case 1024: /* Google Mercator */
++        poSRS->SetMercatorAuxSphere( OGR_FP( NatOriginLat ), OGR_FP( NatOriginLong ),
++                            OGR_FP( FalseEasting ), OGR_FP( FalseNorthing ) );
++        //if( nProjMethod == 1024 || nProjMethod == 9841 ) // override hack for google mercator
++        //{
++        //    poSRS->SetExtension( "PROJCS", "PROJ4", 
++        //                         "+proj=merc +a=6378137 +b=6378137 +lat_ts=0.0 +lon_0=0.0 +x_0=0.0 +y_0=0 +k=1.0 +units=m +nadgrids=@null +wktext  +no_defs" );
++        //}
+         break;
+ 
+       case 9806:
+Index: ogr/ogr_opt.cpp
+===================================================================
+--- ogr/ogr_opt.cpp	(revision 21411)
++++ ogr/ogr_opt.cpp	(working copy)
+@@ -308,6 +308,14 @@
+     SRS_PP_FALSE_NORTHING,
+ 
+     "*",
++    SRS_PT_MERCATOR_AUXSPHERE,
++    "Mercator Auxiliary Sphere",
++    SRS_PP_LATITUDE_OF_ORIGIN,
++    SRS_PP_CENTRAL_MERIDIAN, 
++    SRS_PP_FALSE_EASTING,
++    SRS_PP_FALSE_NORTHING,
++
++    "*",
+     SRS_PT_MERCATOR_2SP,
+     "Mercator (2SP)",
+     SRS_PP_STANDARD_PARALLEL_1,
+Index: ogr/ogr_spatialref.h
+===================================================================
+--- ogr/ogr_spatialref.h	(revision 21411)
++++ ogr/ogr_spatialref.h	(working copy)
+@@ -452,6 +452,9 @@
+     OGRErr      SetMercator( double dfCenterLat, double dfCenterLong,
+                              double dfScale, 
+                              double dfFalseEasting, double dfFalseNorthing );
++    /** Mercator Auxilliary Sphere */
++    OGRErr      SetMercatorAuxSphere ( double dfCenterLat, double dfCenterLong,
++                             double dfFalseEasting, double dfFalseNorthing );
+ 
+     OGRErr      SetMercator2SP( double dfStdP1,
+                                 double dfCenterLat, double dfCenterLong,
+Index: ogr/ogr_srs_api.h
+===================================================================
+--- ogr/ogr_srs_api.h	(revision 21411)
++++ ogr/ogr_srs_api.h	(working copy)
+@@ -135,6 +135,8 @@
+ #define SRS_PT_LAMBERT_AZIMUTHAL_EQUAL_AREA                     \
+                                 "Lambert_Azimuthal_Equal_Area"
+ #define SRS_PT_MERCATOR_1SP     "Mercator_1SP"
++#define SRS_PT_MERCATOR_AUXSPHERE                                       \
++                                "Mercator_Auxiliary_Sphere"
+ #define SRS_PT_MERCATOR_2SP     "Mercator_2SP"
+ #define SRS_PT_MILLER_CYLINDRICAL "Miller_Cylindrical"
+ #define SRS_PT_MOLLWEIDE        "Mollweide"
+Index: ogr/ogr_srs_esri.cpp
+===================================================================
+--- ogr/ogr_srs_esri.cpp	(revision 21411)
++++ ogr/ogr_srs_esri.cpp	(working copy)
+@@ -72,6 +72,7 @@
+     "Van_der_Grinten_I", SRS_PT_VANDERGRINTEN,
+     SRS_PT_TRANSVERSE_MERCATOR, SRS_PT_TRANSVERSE_MERCATOR,
+     "Gauss_Kruger", SRS_PT_TRANSVERSE_MERCATOR,
++    "Mercator_Auxiliary_Sphere", SRS_PT_MERCATOR_AUXSPHERE,
+     "Mercator", SRS_PT_MERCATOR_1SP,
+     NULL, NULL }; 
+  
+Index: ogr/ogr_srs_proj4.cpp
+===================================================================
+--- ogr/ogr_srs_proj4.cpp	(revision 21411)
++++ ogr/ogr_srs_proj4.cpp	(working copy)
+@@ -1651,7 +1651,16 @@
+             return OGRERR_UNSUPPORTED_SRS;
+         }
+     }
+-
++    else if( EQUAL(pszProjection,SRS_PT_MERCATOR_AUXSPHERE) )
++    {
++        sprintf( szProj4+strlen(szProj4),
++                 "+proj=merc +lon_0=%.16g +lat_ts=%.16g +x_0=%.16g +y_0=%.16g +k=%.16g +nadgrids=@null +wktext ",
++                 GetNormProjParm(SRS_PP_CENTRAL_MERIDIAN,0.0),
++                 GetNormProjParm(SRS_PP_LATITUDE_OF_ORIGIN,0.0),
++                 GetNormProjParm(SRS_PP_FALSE_EASTING,0.0),
++                 GetNormProjParm(SRS_PP_FALSE_NORTHING,0.0),
++				 GetNormProjParm(SRS_PP_SCALE_FACTOR,1.0) );
++    }
+     else if( EQUAL(pszProjection,SRS_PT_MERCATOR_2SP) )
+     {
+         sprintf( szProj4+strlen(szProj4),
+@@ -2285,9 +2294,14 @@
+     }
+ 
+     char szEllipseDef[128];
+-
+-    if( pszPROJ4Ellipse == NULL )
++    
++	if ( pszProjection != NULL && EQUAL(pszProjection,SRS_PT_MERCATOR_AUXSPHERE) )
++	{
+         sprintf( szEllipseDef, "+a=%.16g +b=%.16g ",
++                 GetSemiMajor(), GetSemiMajor() );
++	}
++	else if( pszPROJ4Ellipse == NULL )
++        sprintf( szEllipseDef, "+a=%.16g +b=%.16g ",
+                  GetSemiMajor(), GetSemiMinor() );
+     else
+         sprintf( szEllipseDef, "+ellps=%s ",
+@@ -2324,7 +2338,7 @@
+     else if( EQUAL(pszDatum,SRS_DN_NAD83) || nEPSGDatum == 6269 )
+         pszPROJ4Datum = "NAD83";
+ 
+-    else if( EQUAL(pszDatum,SRS_DN_WGS84) || nEPSGDatum == 6326 )
++    else if( EQUAL(pszDatum,SRS_DN_WGS84) || nEPSGDatum == 6326 ) 
+         pszPROJ4Datum = "WGS84";
+ 
+     else if( (pszPROJ4Datum = OGRGetProj4Datum(pszDatum, nEPSGDatum)) != NULL )
+@@ -2332,6 +2346,9 @@
+         /* nothing */
+     }
+ 
++    if (pszProjection != NULL && EQUAL(pszProjection, SRS_PT_MERCATOR_AUXSPHERE))
++       pszPROJ4Datum = NULL;
++
+     if( pszProj4Grids != NULL )
+     {
+         SAFE_PROJ4_STRCAT( szEllipseDef );
+Index: ogr/ogr_srs_validate.cpp
+===================================================================
+--- ogr/ogr_srs_validate.cpp	(revision 21411)
++++ ogr/ogr_srs_validate.cpp	(working copy)
+@@ -91,6 +91,7 @@
+     SRS_PT_ECKERT_VI,
+     SRS_PT_MERCATOR_1SP,
+     SRS_PT_MERCATOR_2SP,
++    SRS_PT_MERCATOR_AUXSPHERE,
+     SRS_PT_MOLLWEIDE,
+     SRS_PT_ROBINSON,
+     SRS_PT_ALBERS_CONIC_EQUAL_AREA,
+@@ -352,6 +353,13 @@
+     SRS_PP_FALSE_NORTHING,
+     NULL,
+ 
++	SRS_PT_MERCATOR_AUXSPHERE,
++    SRS_PP_CENTRAL_MERIDIAN,
++    SRS_PP_STANDARD_PARALLEL_1,
++    SRS_PP_FALSE_EASTING,
++    SRS_PP_FALSE_NORTHING,
++    NULL,
++
+     SRS_PT_MERCATOR_2SP,
+     SRS_PP_STANDARD_PARALLEL_1,
+     SRS_PP_LATITUDE_OF_ORIGIN,
+Index: ogr/ogrspatialreference.cpp
+===================================================================
+--- ogr/ogrspatialreference.cpp	(revision 21411)
++++ ogr/ogrspatialreference.cpp	(working copy)
+@@ -5040,6 +5040,24 @@
+ }
+ 
+ /************************************************************************/
++/*                            SetMercatorAuxSphere()                    */
++/************************************************************************/
++
++OGRErr OGRSpatialReference::SetMercatorAuxSphere( double dfCenterLat, double dfCenterLong,
++                                         double dfFalseEasting,
++                                         double dfFalseNorthing )
++
++{
++    SetProjection( SRS_PT_MERCATOR_AUXSPHERE );
++    SetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, dfCenterLong );
++    SetNormProjParm( SRS_PP_STANDARD_PARALLEL_1, dfCenterLat );
++    SetNormProjParm( SRS_PP_FALSE_EASTING, dfFalseEasting );
++    SetNormProjParm( SRS_PP_FALSE_NORTHING, dfFalseNorthing );
++
++    return OGRERR_NONE;
++}
++
++/************************************************************************/
+ /*                           OSRSetMercator()                           */
+ /************************************************************************/
+ 

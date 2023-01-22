@@ -1,0 +1,11 @@
+--- ./win32/Makefile.gcc	Sun Apr 18 22:35:56 2010
++++ ./win32/Makefile.gcc	Thu Apr  7 12:44:17 2011
+@@ -30,7 +30,7 @@
+ # the DLL name should be changed from "zlib1.dll".
+ 
+ STATICLIB = libz.a
+-SHAREDLIB = zlib1.dll
++SHAREDLIB = libz.dll
+ IMPLIB    = libz.dll.a
+ 
+ #

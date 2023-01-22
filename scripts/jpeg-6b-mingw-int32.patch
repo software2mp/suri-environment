@@ -1,0 +1,23 @@
+diff -Nauwr jmorecfg.h jpeg-6b-int32/jmorecfg.h
+--- jmorecfg.h	1997-08-09 23:58:56.000000000 +0000
++++ jmorecfg.h	2007-12-13 22:38:52.000000000 +0000
+@@ -151,13 +151,17 @@
+
+ /* INT16 must hold at least the values -32768..32767. */
+
+-#ifndef XMD_H			/* X11/xmd.h correctly defines INT16 */
++/* X11/xmd.h correctly defines INT16 */
++/* basetsd.h correctly defines INT16 under MINGW32 */
++#if !defined(XMD_H) && !(defined(_BASETSD_H) && defined(__MINGW32__))
+ typedef short INT16;
+ #endif
+
+ /* INT32 must hold at least signed 32-bit values. */
+
+-#ifndef XMD_H			/* X11/xmd.h correctly defines INT32 */
++/* X11/xmd.h correctly defines INT32 */
++/* basetsd.h correctly defines INT32 under MINGW32 */
++#if !defined(XMD_H) && !(defined(_BASETSD_H) && defined(__MINGW32__))
+ typedef long INT32;
+ #endif
+

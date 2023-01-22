@@ -1,0 +1,32 @@
+Common subdirectories: libgeotiff-1.2.4/bin and libgeotiff-1.2.4-gcc4/bin
+diff -u configure libgeotiff-1.2.4-gcc4/configure
+--- configure	2007-07-28 11:16:27.000000000 -0300
++++ configure	2008-02-15 16:39:58.000000000 -0200
+@@ -2668,7 +2668,7 @@
+   fi
+ 
+   if test "$LD_SHARED" = "/bin/true" \
+-          -a -z "`ld -shared conftest2.o -o libconftest.so 2>&1`" ; then
++          -a -z "`gcc -shared conftest2.o -o libconftest.so 2>&1`" ; then
+     if test -z "`${CC} conftest1.c libconftest.so -o conftest1 2>&1`"; then
+       LD_LIBRARY_PATH_OLD="$LD_LIBRARY_PATH"
+       if test -z "$LD_LIBRARY_PATH" ; then
+@@ -2678,15 +2678,15 @@
+       fi
+       export LD_LIBRARY_PATH
+       if test -z "`./conftest1 2>&1`" ; then
+-        echo "checking for ld -shared ... yes"
+-        LD_SHARED="ld -shared"
++        echo "checking for gcc -shared ... yes"
++        LD_SHARED="gcc -shared"
+       fi
+       LD_LIBRARY_PATH="$LD_LIBRARY_PATH_OLD"
+     fi
+   fi
+ 
+   if test "$LD_SHARED" = "/bin/true" ; then
+-    echo "checking for ld -shared ... no"
++    echo "checking for gcc -shared ... no"
+     if test ! -x /bin/true ; then
+       LD_SHARED=/usr/bin/true
+     fi

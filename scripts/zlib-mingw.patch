@@ -1,0 +1,34 @@
+diff -ruw win32/Makefile.gcc zlib-1.2.3-patch/win32/Makefile.gcc
+--- win32/Makefile.gcc	Sat Aug  2 00:49:00 2003
++++ win32/Makefile.gcc	Sat Jan 24 21:53:56 2009
+@@ -36,7 +36,7 @@
+ #LOC = -DDEBUG -g
+
+ PREFIX =
+-CC = $(PREFIX)gcc
++
+ CFLAGS = $(LOC) -O3 -Wall
+ EXTRA_CFLAGS = -DNO_VIZ
+
+@@ -46,10 +46,10 @@
+ LD = $(CC)
+ LDFLAGS = $(LOC) -s
+
+-AR = $(PREFIX)ar
++
+ ARFLAGS = rcs
+
+-RC = $(PREFIX)windres
++
+ RCFLAGS = --define GCC_WINDRES
+
+ CP = cp -fp
+@@ -52,7 +52,7 @@
+ 
+ RCFLAGS = --define GCC_WINDRES
+ 
+-STRIP = $(PREFIX)strip
++
+ 
+ CP = cp -fp
+ # If GNU install is available, replace $(CP) with install. 

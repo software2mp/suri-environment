@@ -1,0 +1,13 @@
+Index: apps/gdalserver.c
+===================================================================
+--- ./apps/gdalserver.c	(revision 25732)
++++ ./apps/gdalserver.c	(working copy)
+@@ -28,7 +28,7 @@
+  ****************************************************************************/
+ 
+ #if defined(__STDC_VERSION__)
+-#define _XOPEN_SOURCE
++#define _XOPEN_SOURCE 600
+ #endif
+ 
+ #include "cpl_port.h"

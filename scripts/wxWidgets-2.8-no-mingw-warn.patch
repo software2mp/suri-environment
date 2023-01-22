@@ -1,0 +1,19 @@
+Index: include/wx/thread.h
+===================================================================
+--- include/wx/thread.h	Wed Nov 21 09:41:54 2007
++++ include/wx/thread.h	Wed Feb 20 16:55:21 2008
+@@ -688,8 +688,13 @@
+ #else // !wxUSE_THREADS
+
+ // no thread support
++#ifdef __WXMSW__
++inline void wxMutexGuiEnter() { }
++inline void wxMutexGuiLeave() { }
++#else
+ inline void WXDLLIMPEXP_BASE wxMutexGuiEnter() { }
+ inline void WXDLLIMPEXP_BASE wxMutexGuiLeave() { }
++#endif
+
+ // macros for entering/leaving critical sections which may be used without
+ // having to take them inside "#if wxUSE_THREADS"
+

@@ -1,0 +1,24 @@
+--- CMakeLists.txt	2015-10-01 12:42:56 -0300
++++ CMakeLists.txt	2015-10-01 12:43:08 -0300
+@@ -95,7 +95,7 @@
+ # Set the core names of all the libraries
+ #-----------------------------------------------------------------------------
+ SET (HDF4_LIB_CORENAME              "hdf4")
+-SET (HDF4_SRC_LIB_CORENAME          "hdf")
++SET (HDF4_SRC_LIB_CORENAME          "df")
+ SET (HDF4_SRC_FCSTUB_LIB_CORENAME   "hdf_fcstub")
+ SET (HDF4_SRC_FORTRAN_LIB_CORENAME  "hdf_fortran")
+ SET (HDF4_MF_LIB_CORENAME           "mfhdf")
+ 
+--- mfhdf/xdr/CMakeLists.txt	2015-10-01 11:41:57 -0300
++++ mfhdf/xdr/CMakeLists.txt	2015-10-01 11:42:07 -0300
+@@ -37,6 +37,9 @@
+ #-----------------------------------------------------------------------------
+ IF (BUILD_SHARED_LIBS)
+   INSTALL_TARGET_PDB (${HDF4_MF_XDR_LIB_TARGET} ${HDF4_INSTALL_LIB_DIR} libraries)
++  IF (WIN32 AND NOT CYGWIN)
++	  TARGET_LINK_LIBRARIES (${HDF4_MF_XDR_LIB_TARGET} "ws2_32.lib")
++  ENDIF (WIN32 AND NOT CYGWIN)
+ ENDIF (BUILD_SHARED_LIBS)
+   
+ INSTALL (

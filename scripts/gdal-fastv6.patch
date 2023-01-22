@@ -1,0 +1,1984 @@
+diff -rupN gdal-1.11.0/frmts/fastv6/fastv6common.cpp gdal-1.11.0_MOD/frmts/fastv6/fastv6common.cpp
+--- gdal-1.11.0/frmts/fastv6/fastv6common.cpp	1969-12-31 21:00:00.000000000 -0300
++++ gdal-1.11.0_MOD/frmts/fastv6/fastv6common.cpp	2014-06-02 15:02:51.000000000 -0300
+@@ -0,0 +1,246 @@
++/*****************************************************************************
++ *
++ * Project:  Fast v6 Driver
++ * Purpose:  GDAL new Landsat-8 metadata support.
++ * Author:   Daniel Testa, danieltesta@suremptec.com.ar
++ *
++ *****************************************************************************
++ * Copyright (c) 2014, SUR Emprendimientos Tecnologicos S.R.L.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included
++ * in all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ ****************************************************************************/
++
++#include "fastv6common.h"
++
++/**
++ * Determines whether the end of the string pointed by pszStr matches
++ * the specified string pointed by pszValue.
++ */
++int EndsWith_(const char* pszStr, const char* pszValue) {
++    int nStrLen = strlen(pszStr);
++    int nValueLen = strlen(pszValue);
++
++    if (nStrLen > nValueLen) {
++        if (strcmp(pszStr + nStrLen - nValueLen, pszValue) == 0) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++/**
++ * Determines whether the beginning of the string pointed by pszStr matches
++ * the specified string pointed by pszValue.
++ */
++int StartsWith_(const char* pszStr, const char* pszValue) {
++    int nStrLen = strlen(pszStr);
++    int nValueLen = strlen(pszValue);
++
++    if (nStrLen > nValueLen) {
++        if (strncmp(pszStr, pszValue, nValueLen) == 0) {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
++/**
++ * Removes all leading and trailing white-space characters
++ * from the string pointed by pszStr and copies the result
++ * to pszTrimmed.
++ */
++void Trim_(const char* pszStr, char cChr, char* pszTrimmed) {
++    int nFirst = 0;
++    int nLast = strlen(pszStr);
++
++    while (pszStr[nFirst] == cChr)
++        ++nFirst;
++
++    while (pszStr[nLast - 1] == cChr)
++        --nLast;
++
++    int iIndex = 0;
++    int nIxLen = nLast - nFirst;
++    for ( ; iIndex < nIxLen; ++iIndex, ++nFirst)
++        pszTrimmed[iIndex] = pszStr[nFirst];
++
++    pszTrimmed[iIndex] = ASCII_NUL;
++}
++
++/**
++ * Removes all leading and trailing white-space and double quotes characters
++ * from the string pointed by pszStr and copies the result to pszCleanned.
++ */ 
++void CleanStr_(const char* pszStr, char* pszCleanned) {
++    char szNoSpace[BUFFER_SIZE_HUGE] = { 0 };
++    Trim_(pszStr, ASCII_SPACE, szNoSpace);
++
++    Trim_(szNoSpace, ASCII_DQUOTES, pszCleanned);
++}
++
++/**
++ * Reads the next line of characters from pVsilFile into pszStr.
++ */
++int ReadLine_(char* pszStr, VSILFILE* pVsilFile) {
++    char cChr = 0;
++    int iIndex = 0;
++
++    while (VSIFReadL(&cChr, sizeof(char), 1, pVsilFile) == 1 && 
++            cChr != ASCII_LN && cChr != ASCII_NUL) {
++        pszStr[iIndex] = cChr;
++        ++iIndex;        
++    }
++
++    pszStr[iIndex] = ASCII_NUL;
++
++    return iIndex;
++}
++
++/**
++ * Count elements from an array produced by CSLTokenizeString2.
++ */  
++int TokenizeCount_(char** papszElems) {
++    int iIndex = 0;
++    while (papszElems[iIndex] != NULL) ++iIndex;
++    return iIndex;
++}
++
++/**
++ * Gets the temp directory from the system.
++ */
++const char *GetTempDir_() {
++    const char *pszDir = CPLGetConfigOption( "CPL_TMPDIR", NULL );
++
++    if( pszDir == NULL )
++        pszDir = CPLGetConfigOption( "TMPDIR", NULL );
++
++    if( pszDir == NULL )
++        pszDir = CPLGetConfigOption( "TEMP", NULL );
++
++    if( pszDir == NULL )
++        pszDir = ".";
++
++    return pszDir;
++}
++
++/**
++ * Process the MTL file group.
++ */
++int ProcessMTLFileGroup_(VSILFILE* pFile, CPLHastTableH hMtl,
++    const char* pzsGroup) {
++    CPLHastTableH hHTGroupCtt = CPLHashTableInit(HASHTABLE_GROUP_CTT_CAPACITY);
++    
++    void* pOldGrp = CPLHashTablePut(hMtl, pzsGroup, hHTGroupCtt);
++    if (pOldGrp != NULL) CPLFree(pOldGrp);
++
++    int nEndGroup = FALSE;
++    while (VSIFEofL(pFile) == FALSE && nEndGroup == FALSE) {    
++        char szBuff[BUFFER_SIZE_SMALL] = { 0 };
++        ReadLine_(szBuff, pFile);
++
++        char** papszKeyVal = CSLTokenizeString2(szBuff, "=",
++            CSLT_HONOURSTRINGS);
++
++        char szKey[BUFFER_SIZE_KEY] = { 0 };
++        char szValue[BUFFER_SIZE_VALUE] = { 0 };
++
++        CleanStr_(papszKeyVal[0], szKey);
++        CleanStr_(papszKeyVal[1], szValue);
++        
++        if (strcmp("END_GROUP", szKey) == 0) {
++            nEndGroup = TRUE;
++		} else {
++            void* pOldVal = CPLHashTablePut(hHTGroupCtt, szKey,
++                CPLStrdup(szValue));
++            if (pOldVal != NULL) CPLFree(pOldVal);
++		}	
++
++        CSLDestroy(papszKeyVal);
++    }
++    return TRUE;
++}
++
++/**
++ * Process the MTL file.
++ */
++int ProcessMTLFile_(VSILFILE* pFile, CPLHastTableH hMtl) {
++    while (VSIFEofL(pFile) == FALSE) {    
++        char szBuff[BUFFER_SIZE_SMALL] = { 0 };
++        ReadLine_(szBuff, pFile);
++
++        char** papszKeyVal = CSLTokenizeString2(szBuff, "=",
++            CSLT_HONOURSTRINGS);
++
++        if (TokenizeCount_(papszKeyVal) >= 1) {
++            char szKey[BUFFER_SIZE_KEY] = { 0 };
++            char szValue[BUFFER_SIZE_VALUE] = { 0 };            
++
++            CleanStr_(papszKeyVal[0], szKey);
++            if (TokenizeCount_(papszKeyVal) == 2 && strcmp(szKey, "END") != 0) {
++                CleanStr_(papszKeyVal[1], szValue);
++            
++                if (strcmp("GROUP", szKey) == 0 &&
++                    strcmp("L1_METADATA_FILE", szValue) != 0) {
++                    ProcessMTLFileGroup_(pFile, hMtl, szValue);
++                }	
++            }
++        }
++
++        CSLDestroy(papszKeyVal);
++    }
++    return TRUE;
++}
++
++/**
++ * Cleanup work for a MTL hashtable.
++ */
++void* MTLHtCleanup(CPLHastTableH hMtl) {
++    char** papszGrpsKeys = CPLHashTableKeysGet(hMtl);
++    char** papszGrpsKeysAux = papszGrpsKeys;
++    while (*papszGrpsKeysAux != NULL) {
++        CPLHastTableH hGroup = (CPLHastTableH)CPLHashTableGet(hMtl,
++            *papszGrpsKeysAux);
++
++        char** papszValuesKeys = CPLHashTableKeysGet(hGroup);
++        char** papszValuesKeysAux = papszValuesKeys;
++        while (*papszValuesKeysAux != NULL) {
++            CPLFree((char*)CPLHashTableGet(hGroup, *papszValuesKeysAux));
++            ++papszValuesKeysAux;
++        }
++        papszValuesKeys = CPLHashTableKeysFree(papszValuesKeys);
++        hGroup = CPLHashTableFree(hGroup);
++        ++papszGrpsKeysAux;
++    }
++    papszGrpsKeys = CPLHashTableKeysFree(papszGrpsKeys);
++    return CPLHashTableFree(hMtl);
++}
++
++/**
++ * Get a values from the specified group.
++ */ 
++void* GetValue(CPLHastTableH hMtl, const char* pzsGroup, const char* pzsKey) {
++    void* pValue = NULL;
++    CPLHastTableH hGroup = CPLHashTableGet(hMtl, pzsGroup);
++    if (hGroup != NULL) {
++        pValue = CPLHashTableGet(hGroup, pzsKey);
++    }
++    return pValue;
++}
+diff -rupN gdal-1.11.0/frmts/fastv6/fastv6common.h gdal-1.11.0_MOD/frmts/fastv6/fastv6common.h
+--- gdal-1.11.0/frmts/fastv6/fastv6common.h	1969-12-31 21:00:00.000000000 -0300
++++ gdal-1.11.0_MOD/frmts/fastv6/fastv6common.h	2014-06-02 15:02:51.000000000 -0300
+@@ -0,0 +1,125 @@
++/*****************************************************************************
++ *
++ * Project:  Fast v6 Driver
++ * Purpose:  GDAL new Landsat-8 metadata support.
++ * Author:   Daniel Testa, danieltesta@suremptec.com.ar
++ *
++ *****************************************************************************
++ * Copyright (c) 2014, SUR Emprendimientos Tecnologicos S.R.L.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included
++ * in all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ ****************************************************************************/
++
++#ifndef FASTV6_COMMON_H_
++#define FASTV6_COMMON_H_
++
++#include "cpl_conv.h"
++#include "cpl_multiproc.h"
++#include "cpl_string.h"
++#include "cpl_vsi.h"
++#include "cpl_hash_table.h"
++#include "gdal_pam.h"
++#include "ogr_spatialref.h"
++#include "../vrt/vrtdataset.h"
++
++#include <stdio.h>
++
++#define HASHTABLE_GROUP_CAPACITY        11
++#define HASHTABLE_GROUP_CTT_CAPACITY    53
++
++#define FASTV6_FILE_ENDSWITH            "_MTL.txt"
++#define FASTV6_IMAGE_FILE_STARTSWITH    "FASTV6:"
++
++#define BUFFER_SIZE_SMALL       1024
++#define BUFFER_SIZE_BIG         2048
++#define BUFFER_SIZE_HUGE        4096
++#define BUFFER_SIZE_EXTRA_HUGE  8192
++#define BUFFER_SIZE_KEY         BUFFER_SIZE_SMALL
++#define BUFFER_SIZE_VALUE       BUFFER_SIZE_SMALL
++
++#define ASCII_NUL               0x00
++#define ASCII_LN                0x0A
++#define ASCII_SPACE             0x20
++#define ASCII_DQUOTES           0x22
++#define ASCII_COMMA             0x2C
++#define ASCII_COLON             0x3A
++#define ASCII_EQUAL             0x3D
++
++/**
++ * Determines whether the end of the string pointed by pszStr matches
++ * the specified string pointed by pszValue.
++ */
++int EndsWith_(const char* pszStr, const char* pszValue);
++
++/**
++ * Determines whether the beginning of the string pointed by pszStr matches
++ * the specified string pointed by pszValue.
++ */
++int StartsWith_(const char* pszStr, const char* pszValue);
++
++/**
++ * Removes all leading and trailing white-space characters
++ * from the string pointed by pszStr and copies the result
++ * to pszTrimmed.
++ */
++void Trim_(const char* pszStr, char cChr, char* pszTrimmed);
++
++/**
++ * Removes all leading and trailing white-space and double quotes characters
++ * from the string pointed by pszStr and copies the result to pszCleanned.
++ */ 
++void CleanStr_(const char* pszStr, char* pszCleanned);
++
++/**
++ * Reads the next line of characters from pVsilFile into pszStr.
++ */
++int ReadLine_(char* pszStr, VSILFILE* pVsilFile);
++
++/**
++ * Count elements from an array produced by CSLTokenizeString2.
++ */  
++int TokenizeCount_(char** papszElems);
++
++/**
++ * Gets the temp directory from the system.
++ */
++const char *GetTempDir_();
++
++/**
++ * Process the MTL file group.
++ */
++int ProcessMTLFileGroup_(VSILFILE* pFile, CPLHastTableH hMtl,
++    const char* pzsGroup);
++
++/**
++ * Process the MTL file.
++ */
++int ProcessMTLFile_(VSILFILE* pFile, CPLHastTableH hMtl);
++
++/**
++ * Cleanup work for a MTL hashtable.
++ */
++void* MTLHtCleanup(CPLHastTableH hMtl);
++
++/**
++ * Get a values from the specified group.
++ */ 
++void* GetValue(CPLHastTableH hMtl, const char* pzsGroup, const char* pzsKey);
++
++#endif  // FASTV6_COMMON_H_
+diff -rupN gdal-1.11.0/frmts/fastv6/fastv6dataset.cpp gdal-1.11.0_MOD/frmts/fastv6/fastv6dataset.cpp
+--- gdal-1.11.0/frmts/fastv6/fastv6dataset.cpp	1969-12-31 21:00:00.000000000 -0300
++++ gdal-1.11.0_MOD/frmts/fastv6/fastv6dataset.cpp	2014-07-17 17:31:19.000000000 -0300
+@@ -0,0 +1,370 @@
++/******************************************************************************
++ *
++ * Project:  Fast v6 Driver
++ * Purpose:  GDAL new Landsat-8 metadata support.
++ * Author:   Daniel Testa, danieltesta@suremptec.com.ar
++ *
++ ******************************************************************************
++ * Copyright (c) 2014, SUR Emprendimientos Tecnologicos S.R.L.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included
++ * in all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ ****************************************************************************/
++
++#include "fastv6common.h"
++
++#define FASTV6_FORMAT_DESC              "FASTV6"
++#define FASTV6_FORMAT_LONGNAME          "FAST v6 format (_MTL.txt)"
++
++CPL_C_START
++void CPL_DLL GDALRegister_FASTV6(void);
++CPL_C_END
++
++/**
++ * Class for opening MTL metadata files.
++ */
++class FASTV6Dataset : public GDALPamDataset {
++public:
++    /**
++     * Ctor.
++     */
++    FASTV6Dataset();
++
++    /**
++     * Dtor.
++     */
++    virtual ~FASTV6Dataset();
++
++    /**
++     * Method to open the metadata file and create the dataset.
++     */
++    static GDALDataset* Open(GDALOpenInfo* poOpenInfo);
++
++    /**
++     * Verify if this is a MTL file.
++     */
++    static int Identify(GDALOpenInfo* poOpenInfo);
++
++    /**
++     * Loads metadata.
++     */
++    int Load();
++
++    /**
++     * Sets file descriptor.
++     */
++    void SetPFile(VSILFILE* pFile);
++
++    /**
++     * Sets file name.
++     */
++    void SetFilename(char* pszFilename);
++
++    /**
++     * Sets directory name.
++     */
++    void SetDirname(char* pszDirname);
++
++private:
++    VSILFILE* pFile_;
++    char* pszFilename_;
++    char* pszDirname_;
++    char** papszSubDatasets_;
++    CPLHastTableH hMtl_;
++
++    /**
++     * Process the MTL file.
++     */
++    int ProcessMTLFile();
++
++    /**
++     * Load sub datasets.
++     */
++    int LoadSubDatasets();
++};
++
++/**
++ * Ctor.
++ */
++FASTV6Dataset::FASTV6Dataset() : pFile_(NULL), pszFilename_(NULL),
++    pszDirname_(NULL), papszSubDatasets_(NULL) {
++
++    hMtl_ = CPLHashTableInit(HASHTABLE_GROUP_CAPACITY);
++}
++
++/**
++ * Dtor.
++ */
++FASTV6Dataset::~FASTV6Dataset() {
++    CSLDestroy(papszSubDatasets_);
++
++    if (pszFilename_ != NULL)
++        CPLFree(pszFilename_);
++
++    if (pszDirname_ != NULL)
++        CPLFree(pszDirname_);
++
++    if (pFile_ != NULL)
++        VSIFCloseL(pFile_);
++
++    // Free hashtables
++    MTLHtCleanup(hMtl_);
++}
++
++/**
++ * Method to open the metadata file and create the dataset.
++ */
++GDALDataset* FASTV6Dataset::Open(GDALOpenInfo* poOpenInfo) {
++    if (Identify(poOpenInfo) == FALSE)
++        return NULL;
++   
++    FASTV6Dataset* poDS = new FASTV6Dataset();
++
++    VSILFILE* pFile = VSIFOpenL(poOpenInfo->pszFilename, "rb");    
++    if (pFile == NULL) {
++        delete poDS;
++        return NULL;
++    }
++
++    poDS->SetPFile(pFile);
++    poDS->SetDescription(poOpenInfo->pszFilename);
++    poDS->SetFilename(CPLStrdup(poOpenInfo->pszFilename));
++    poDS->SetDirname(CPLStrdup(CPLGetDirname(poOpenInfo->pszFilename)));
++
++    if (!poDS->Load()) {
++        delete poDS;
++        poDS = NULL;
++    }
++
++    return poDS;
++}
++
++/**
++ * Verify if this is a MTL file.
++ */
++int FASTV6Dataset::Identify(GDALOpenInfo* poOpenInfo) {
++    return EndsWith_(poOpenInfo->pszFilename, FASTV6_FILE_ENDSWITH);
++}
++
++/**
++ * Loads metadata.
++ */
++int FASTV6Dataset::Load() {
++    if (!ProcessMTLFile())
++        return FALSE;
++
++    if (!LoadSubDatasets())
++        return FALSE;
++
++    return TRUE;
++}
++
++/**
++ * Sets file descriptor.
++ */
++void FASTV6Dataset::SetPFile(VSILFILE* pFile) {
++    pFile_ = pFile;
++}
++
++/**
++ * Sets file name.
++ */
++void FASTV6Dataset::SetFilename(char* pszFilename) {
++    pszFilename_ = pszFilename;
++}
++
++/**
++ * Sets directory name.
++ */
++void FASTV6Dataset::SetDirname(char* pszDirname) {
++    pszDirname_ = pszDirname;
++}
++
++/**
++ * Process the MTL file.
++ */
++int FASTV6Dataset::ProcessMTLFile() {
++    return ProcessMTLFile_(this->pFile_, this->hMtl_);
++}
++
++/**
++ * Load sub datasets.
++ */
++int FASTV6Dataset::LoadSubDatasets() {
++    int nSDCount = 0;
++
++    char* pzsSceneId = (char*)GetValue(hMtl_, "METADATA_FILE_INFO",
++                                              "LANDSAT_SCENE_ID");
++
++    // Check panchromatic.
++    char* pzsLines = (char*)GetValue(hMtl_, "PRODUCT_METADATA",
++                                            "PANCHROMATIC_LINES");
++    char* pzsSamples = (char*)GetValue(hMtl_, "PRODUCT_METADATA", 
++                                              "PANCHROMATIC_SAMPLES");
++
++    if (pzsLines != NULL && pzsSamples != NULL) {
++        // Name.
++        char pzSDNameKey[BUFFER_SIZE_KEY] = { 0 };
++        char pzSDNameValue[BUFFER_SIZE_VALUE] = { 0 };
++
++        sprintf(pzSDNameKey, "SUBDATASET_%d_NAME", nSDCount + 1);
++        sprintf(pzSDNameValue, "FASTV6:\"%s\":panchromatic", GetDescription());
++
++        this->papszSubDatasets_ =
++                CSLSetNameValue(this->papszSubDatasets_, pzSDNameKey,
++                    pzSDNameValue);
++
++        // Description.
++        char pzSDDescKey[BUFFER_SIZE_KEY] = { 0 };
++        char pzSDDescValue[BUFFER_SIZE_VALUE] = { 0 };
++
++        sprintf(pzSDDescKey, "SUBDATASET_%d_DESC", nSDCount + 1);
++        sprintf(pzSDDescValue, "%s (Panchromatic)", pzsSceneId);
++
++        this->papszSubDatasets_ =
++                CSLSetNameValue(this->papszSubDatasets_, pzSDDescKey,
++                    pzSDDescValue);
++
++        ++nSDCount;
++    }
++
++    // Check reflective.
++    pzsLines = (char*)GetValue(hMtl_, "PRODUCT_METADATA", "REFLECTIVE_LINES");
++    pzsSamples = (char*)GetValue(hMtl_, "PRODUCT_METADATA", 
++                                        "REFLECTIVE_SAMPLES");
++
++    if (pzsLines != NULL && pzsSamples != NULL) {
++        // Name.
++        char pzSDNameKey[BUFFER_SIZE_KEY] = { 0 };
++        char pzSDNameValue[BUFFER_SIZE_VALUE] = { 0 };
++
++        sprintf(pzSDNameKey, "SUBDATASET_%d_NAME", nSDCount + 1);
++        sprintf(pzSDNameValue, "FASTV6:\"%s\":reflective", GetDescription());
++
++        this->papszSubDatasets_ =
++                CSLSetNameValue(this->papszSubDatasets_, pzSDNameKey,
++                    pzSDNameValue);
++
++        // Description.
++        char pzSDDescKey[BUFFER_SIZE_KEY] = { 0 };
++        char pzSDDescValue[BUFFER_SIZE_VALUE] = { 0 };
++
++        sprintf(pzSDDescKey, "SUBDATASET_%d_DESC", nSDCount + 1);
++        sprintf(pzSDDescValue, "%s (Reflective)", pzsSceneId);
++
++        this->papszSubDatasets_ =
++                CSLSetNameValue(this->papszSubDatasets_, pzSDDescKey,
++                    pzSDDescValue);
++
++        ++nSDCount;
++    }
++
++    // Check thermal.
++    pzsLines = (char*)GetValue(hMtl_, "PRODUCT_METADATA", "REFLECTIVE_LINES");
++    pzsSamples = (char*)GetValue(hMtl_, "PRODUCT_METADATA",
++                                        "REFLECTIVE_SAMPLES");
++
++    if (pzsLines != NULL && pzsSamples != NULL) {
++        // Name.
++        char pzSDNameKey[BUFFER_SIZE_KEY] = { 0 };
++        char pzSDNameValue[BUFFER_SIZE_VALUE] = { 0 };
++
++        sprintf(pzSDNameKey, "SUBDATASET_%d_NAME", nSDCount + 1);
++        sprintf(pzSDNameValue, "FASTV6:\"%s\":thermal", GetDescription());
++
++        this->papszSubDatasets_ =
++                CSLSetNameValue(this->papszSubDatasets_, pzSDNameKey,
++                    pzSDNameValue);
++
++        // Description.
++        char pzSDDescKey[BUFFER_SIZE_KEY] = { 0 };
++        char pzSDDescValue[BUFFER_SIZE_VALUE] = { 0 };
++
++        sprintf(pzSDDescKey, "SUBDATASET_%d_DESC", nSDCount + 1);
++        sprintf(pzSDDescValue, "%s (Thermal)", pzsSceneId);
++
++        this->papszSubDatasets_ =
++                CSLSetNameValue(this->papszSubDatasets_, pzSDDescKey,
++                    pzSDDescValue);
++
++        ++nSDCount;
++    }
++
++    // Check quality.
++    char* pzsQuality = (char*)GetValue(hMtl_, "PRODUCT_METADATA",
++                                              "FILE_NAME_BAND_QUALITY");
++
++    if (pzsQuality != NULL) {
++        // Name.
++        char pzSDNameKey[BUFFER_SIZE_KEY] = { 0 };
++        char pzSDNameValue[BUFFER_SIZE_VALUE] = { 0 };
++
++        sprintf(pzSDNameKey, "SUBDATASET_%d_NAME", nSDCount + 1);
++        sprintf(pzSDNameValue, "FASTV6:\"%s\":quality", GetDescription());
++
++        this->papszSubDatasets_ =
++                CSLSetNameValue(this->papszSubDatasets_, pzSDNameKey,
++                    pzSDNameValue);
++
++        // Description.
++        char pzSDDescKey[BUFFER_SIZE_KEY] = { 0 };
++        char pzSDDescValue[BUFFER_SIZE_VALUE] = { 0 };
++
++        sprintf(pzSDDescKey, "SUBDATASET_%d_DESC", nSDCount + 1);
++        sprintf(pzSDDescValue, "%s (Quality)", pzsSceneId);
++
++        this->papszSubDatasets_ =
++                CSLSetNameValue(this->papszSubDatasets_, pzSDDescKey,
++                    pzSDDescValue);
++
++        ++nSDCount;
++    }
++
++    this->SetMetadata(this->papszSubDatasets_, "SUBDATASETS");
++
++    return TRUE;
++}
++
++/**
++ * Register driver.
++ */
++void GDALRegister_FASTV6() {
++    if (!GDAL_CHECK_VERSION(FASTV6_FORMAT_DESC))
++        return;
++
++    if (GDALGetDriverByName(FASTV6_FORMAT_DESC) == NULL)
++    {
++        GDALDriver* poDriver = new GDALDriver();
++        
++        poDriver->SetDescription(FASTV6_FORMAT_DESC);
++
++#ifdef GDAL_DCAP_RASTER
++        poDriver->SetMetadataItem(GDAL_DCAP_RASTER, "YES");
++#endif
++
++        poDriver->SetMetadataItem(GDAL_DMD_LONGNAME, FASTV6_FORMAT_LONGNAME);
++        poDriver->SetMetadataItem(GDAL_DMD_HELPTOPIC, "frmt_fastv6.html" );
++        poDriver->SetMetadataItem(GDAL_DMD_EXTENSION, "_MTL.txt");
++        poDriver->SetMetadataItem(GDAL_DMD_SUBDATASETS, "YES");
++
++        poDriver->pfnOpen = FASTV6Dataset::Open;
++        poDriver->pfnIdentify = FASTV6Dataset::Identify;
++
++        GetGDALDriverManager()->RegisterDriver(poDriver);
++    }
++}
+diff -rupN gdal-1.11.0/frmts/fastv6/fastv6imagedataset.cpp gdal-1.11.0_MOD/frmts/fastv6/fastv6imagedataset.cpp
+--- gdal-1.11.0/frmts/fastv6/fastv6imagedataset.cpp	1969-12-31 21:00:00.000000000 -0300
++++ gdal-1.11.0_MOD/frmts/fastv6/fastv6imagedataset.cpp	2014-06-02 15:02:51.000000000 -0300
+@@ -0,0 +1,642 @@
++/*****************************************************************************
++ *
++ * Project:  Fast v6 Driver
++ * Purpose:  GDAL new Landsat-8 metadata support.
++ * Author:   Daniel Testa, danieltesta@suremptec.com.ar
++ *
++ *****************************************************************************
++ * Copyright (c) 2014, SUR Emprendimientos Tecnologicos S.R.L.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included
++ * in all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ ****************************************************************************/
++
++#include "fastv6common.h"
++
++#define FASTV6_IMAGE_FORMAT_DESC        "FASTV6Image"
++#define FASTV6_IMAGE_FORMAT_LONGNAME    "FAST v6 Dataset"
++
++CPL_C_START
++void CPL_DLL GDALRegister_FASTV6Image(void);
++CPL_C_END
++
++/**
++ * Class for opening MTL metadata files.
++ */
++class FASTV6ImageDataset : public GDALPamDataset {
++public:
++    /**
++     * Ctor.
++     */
++    FASTV6ImageDataset();
++
++    /**
++     * Dtor.
++     */
++    virtual ~FASTV6ImageDataset();
++
++    /**
++     * Method to open the metadata file and create the dataset.
++     */
++    static GDALDataset* Open(GDALOpenInfo* poOpenInfo);
++
++    /**
++     * Verify if this is a MTL file.
++     */
++    static int Identify(GDALOpenInfo* poOpenInfo);
++
++private:
++    /**
++     * Gets dataset size based on the name specified.
++     */
++    static int GetSubdatasetSize(CPLHastTableH hMtl, const char* pszSubDS,
++        int& nXSize, int& nYSize);
++
++    /**
++     * Load sub datasets.
++     */
++    static GDALDataset* LoadDataset(GDALOpenInfo* poOpenInfo,
++        const char* pszSDName, CPLHastTableH hMtl);
++
++    /**
++     * Loads panchromatic subdataset.
++     */
++    static GDALDataset* LoadPanchromatic(GDALOpenInfo* poOpenInfo,
++        CPLHastTableH hMtl);
++
++    /**
++     * Loads reflective subdataset.
++     */
++    static GDALDataset* LoadReflective(GDALOpenInfo* poOpenInfo,
++        CPLHastTableH hMtl);
++    
++    /**
++     * Loads thermal subdataset.
++     */
++    static GDALDataset* LoadThermal(GDALOpenInfo* poOpenInfo,
++        CPLHastTableH hMtl);
++
++    /**
++     * Loads quality subdataset.
++     */
++    static GDALDataset* LoadQuality(GDALOpenInfo* poOpenInfo,
++        CPLHastTableH hMtl);
++
++    /**
++     * Gets first reflective band available.
++     */
++    static GDALDataset* GetStAvailableReflectiveBand(GDALOpenInfo* poOpenInfo,
++        CPLHastTableH hMtl);
++
++    /**
++     * Gets first thermal band available.
++     */
++    static GDALDataset* GetStAvailableThermalBand(GDALOpenInfo* poOpenInfo,
++        CPLHastTableH hMtl);
++
++    /**
++     * Copies dataset's information.
++     */
++    static void CopyDatasetInfo(GDALDataset* poDestDS, GDALDataset* poSrcDS);
++};
++
++/**
++ * Ctor.
++ */
++FASTV6ImageDataset::FASTV6ImageDataset() {
++
++}
++
++/**
++ * Dtor.
++ */
++FASTV6ImageDataset::~FASTV6ImageDataset() {
++
++}
++
++/**
++ * Method to open the metadata file and create the dataset.
++ */
++GDALDataset* FASTV6ImageDataset::Open(GDALOpenInfo* poOpenInfo) {
++    char** papszSD = CSLTokenizeString2(poOpenInfo->pszFilename, ":",
++        CSLT_HONOURSTRINGS);
++
++    if (TokenizeCount_(papszSD) != 3)
++        return NULL;
++
++    char szFilename[BUFFER_SIZE_SMALL] = { 0 };
++    CleanStr_(papszSD[1], szFilename);
++
++    char szSubDS[BUFFER_SIZE_SMALL] = { 0 };
++    CleanStr_(papszSD[2], szSubDS);
++
++    VSILFILE* pFile = VSIFOpenL(szFilename, "rb");
++    if (pFile == NULL) {
++        return NULL;
++    }
++
++    CPLHastTableH hMtl = CPLHashTableInit(HASHTABLE_GROUP_CAPACITY);
++    ProcessMTLFile_(pFile, hMtl);
++    VSIFCloseL(pFile);
++
++    GDALDataset* poDS = FASTV6ImageDataset::LoadDataset(poOpenInfo,
++        szSubDS, hMtl);
++
++    CSLDestroy(papszSD);
++
++    MTLHtCleanup(hMtl);
++
++    return poDS;
++}
++
++/**
++ * Verify if this is a MTL file.
++ */
++int FASTV6ImageDataset::Identify(GDALOpenInfo* poOpenInfo) {
++    return StartsWith_(poOpenInfo->pszFilename, FASTV6_IMAGE_FILE_STARTSWITH);
++}
++
++/**
++ * Gets dataset size based on the name specified.
++ */
++int FASTV6ImageDataset::GetSubdatasetSize(CPLHastTableH hMtl,
++    const char* pszSubDS, int& nXSize, int& nYSize) {
++
++    int bRetVal = TRUE;
++
++    char* pzsPanLines = NULL;
++    char* pzsPanSamples = NULL;
++
++    if (strcmp(pszSubDS, "panchromatic") == 0) {
++        pzsPanLines = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++                                            "PANCHROMATIC_LINES");
++        pzsPanSamples = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++                                              "PANCHROMATIC_SAMPLES");
++    } else if (strcmp(pszSubDS, "reflective") == 0) {
++        pzsPanLines = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++                                            "REFLECTIVE_LINES");
++        pzsPanSamples = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++                                              "REFLECTIVE_SAMPLES");
++    } else if (strcmp(pszSubDS, "thermal") == 0) {
++        pzsPanLines = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++                                            "THERMAL_LINES");
++        pzsPanSamples = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++                                              "THERMAL_SAMPLES");
++    } else {
++        bRetVal = FALSE;
++    }
++    
++    if (pzsPanLines != NULL && pzsPanSamples != NULL) {
++        nXSize = atol(pzsPanSamples);
++        nYSize = atol(pzsPanLines);
++    } else {
++        bRetVal = FALSE;
++    }
++
++    return bRetVal;
++}
++
++/**
++ * Load sub datasets.
++ */
++GDALDataset* FASTV6ImageDataset::LoadDataset(GDALOpenInfo* poOpenInfo,
++    const char* pszSDName, CPLHastTableH hMtl) {
++    if (strcmp(pszSDName, "panchromatic") == 0) {
++        return LoadPanchromatic(poOpenInfo, hMtl);
++    } else if (strcmp(pszSDName, "reflective") == 0) {
++        return LoadReflective(poOpenInfo, hMtl);
++    } else if (strcmp(pszSDName, "thermal") == 0) {
++        return LoadThermal(poOpenInfo, hMtl);
++    } else if (strcmp(pszSDName, "quality") == 0) {
++        return LoadQuality(poOpenInfo, hMtl);
++    }
++    return NULL;
++}
++
++/**
++ * Loads panchromatic subdataset.
++ */
++GDALDataset* FASTV6ImageDataset::LoadPanchromatic(
++    GDALOpenInfo* poOpenInfo, CPLHastTableH hMtl) {
++
++    char* pzsSceneId = (char*)GetValue(hMtl, "METADATA_FILE_INFO",
++                                             "LANDSAT_SCENE_ID");   
++
++    // Get size.
++    int nXSize = 0, nYSize = 0;
++    int bFoundSDSize = FASTV6ImageDataset::GetSubdatasetSize(hMtl,
++        "panchromatic", nXSize, nYSize);
++    if (bFoundSDSize == FALSE)
++        return NULL;
++
++    // Get directory where files are and the source band name.
++    char** papszSD = CSLTokenizeString2(poOpenInfo->pszFilename, ":",
++        CSLT_HONOURSTRINGS);
++    char* pszDirName = CPLStrdup(CPLGetDirname(papszSD[1]));
++    char* pzsPanBand = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++                                             "FILE_NAME_BAND_8");
++
++    if (pzsPanBand == NULL)
++        return NULL;
++    
++    char pzsSrcFilename[BUFFER_SIZE_HUGE] = { 0 };
++    sprintf(pzsSrcFilename, "%s%s%s", pszDirName, "/", pzsPanBand);
++    CPLFree(pszDirName);
++    CSLDestroy(papszSD);
++
++    // Open pan file.
++    GDALDataset* poSrcDS = (GDALDataset*)GDALOpen(pzsSrcFilename, GA_ReadOnly);
++    if (poSrcDS == NULL)
++        return NULL;
++
++    // Create a virtual dataset.
++    VRTDataset* poVrtDS = (VRTDataset*)VRTCreate(nXSize, nYSize);
++    char szTempFN[BUFFER_SIZE_HUGE] = { 0 };
++    sprintf(szTempFN, "%s/%s (panchromatic).vrt", GetTempDir_(), pzsSceneId);
++    poVrtDS->SetDescription(szTempFN);    
++
++    // Copy common dataset info.
++    CopyDatasetInfo(poVrtDS, poSrcDS);
++
++    // Copy band info.
++    GDALRasterBand* psrcband = poSrcDS->GetRasterBand(1);
++
++    poVrtDS->AddBand(psrcband->GetRasterDataType(), NULL);
++    VRTSourcedRasterBand* pvirtband =
++        (VRTSourcedRasterBand*)poVrtDS->GetRasterBand(
++            poVrtDS->GetRasterCount());
++    
++    pvirtband->AddSimpleSource(psrcband, 0, 0, GDALGetRasterXSize(poSrcDS),
++                             GDALGetRasterYSize(poSrcDS), 0, 0,
++                                nXSize, nYSize);
++
++    pvirtband->CopyCommonInfoFrom(psrcband);
++
++    // Free resources and cleanup.
++    GDALClose(poVrtDS);
++    GDALClose(poSrcDS);
++
++    CPLCleanupTLS();
++
++    //
++    return (GDALDataset*)GDALOpen(szTempFN, GA_ReadOnly);
++}
++
++/**
++ * Loads reflective subdataset.
++ */
++GDALDataset* FASTV6ImageDataset::LoadReflective(
++    GDALOpenInfo* poOpenInfo, CPLHastTableH hMtl) {
++    
++    GDALDataset* pahDSs[8] = { NULL };
++    
++    // Get directory where files are.
++    char** papszSD = CSLTokenizeString2(poOpenInfo->pszFilename, ":",
++        CSLT_HONOURSTRINGS);
++    char* pszDirName = CPLStrdup(CPLGetDirname(papszSD[1]));
++    
++    // Get scene ID to compose the dataset name.
++    char* pzsSceneId = (char*)GetValue(hMtl, "METADATA_FILE_INFO",
++                                             "LANDSAT_SCENE_ID");
++
++    // Get size.
++    int nXSize = 0, nYSize = 0;
++    int bFoundSDSize = FASTV6ImageDataset::GetSubdatasetSize(hMtl,
++        "reflective", nXSize, nYSize);
++    if (bFoundSDSize == FALSE)
++        return NULL;
++
++    // Set dataset info from the first band tif.    
++    GDALDataset* poSrcDS = GetStAvailableReflectiveBand(poOpenInfo, hMtl);
++    if (poSrcDS == NULL)
++        return NULL;
++
++    // Create a virtual dataset.
++    VRTDataset* poVrtDS = (VRTDataset*)VRTCreate(nXSize, nYSize);
++    char szTempFN[BUFFER_SIZE_HUGE] = { 0 };
++    sprintf(szTempFN, "%s/%s (reflective).vrt", GetTempDir_(), pzsSceneId);
++    poVrtDS->SetDescription(szTempFN);
++
++    // Copy common dataset info.
++    CopyDatasetInfo(poVrtDS, poSrcDS);
++    GDALClose(poSrcDS);    
++
++    // Set bands (1 to 7 and 9).
++    for (int iIndex = 0; iIndex < 9; ++iIndex) {
++        int nSrcBand = iIndex + 1;
++        if (nSrcBand != 8) {
++            char szFilename[BUFFER_SIZE_HUGE] = { 0 };
++            sprintf(szFilename, "FILE_NAME_BAND_%d", nSrcBand);
++
++            char* pzsReflBand = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++                szFilename);
++
++            if (pzsReflBand != NULL) {
++                char szSrcFilename[BUFFER_SIZE_HUGE] = { 0 };
++                sprintf(szSrcFilename, "%s%s%s", pszDirName, "/", pzsReflBand);
++
++                GDALDataset* poBandDS = (GDALDataset*)GDALOpen(szSrcFilename,
++                    GA_ReadOnly);
++
++                VRTSourcedRasterBand* pvirtband = NULL;
++                GDALRasterBand* psrcband = NULL;
++
++                psrcband = poBandDS->GetRasterBand(1);
++
++                poVrtDS->AddBand(psrcband->GetRasterDataType(), NULL);
++                pvirtband = (VRTSourcedRasterBand*) poVrtDS->GetRasterBand(
++                    poVrtDS->GetRasterCount());
++
++                pvirtband->AddSimpleSource(psrcband, 0, 0,
++                    poBandDS->GetRasterXSize(), poBandDS->GetRasterYSize(),
++                    0, 0, nXSize, nYSize);
++
++                pvirtband->CopyCommonInfoFrom(psrcband);
++            
++                pahDSs[poVrtDS->GetRasterCount() - 1] = poBandDS;
++            }
++        }
++    }    
++    
++    // Free resources and cleanup.
++    GDALClose(poVrtDS);
++
++    CPLFree(pszDirName);
++    CSLDestroy(papszSD);
++    
++    for (int iIndex = 0; iIndex < 8; ++iIndex)
++        if (pahDSs[iIndex] != NULL)
++            GDALClose(pahDSs[iIndex]);
++    
++    CPLCleanupTLS();
++
++    //
++    return (GDALDataset*)GDALOpen(szTempFN, GA_ReadOnly);
++}
++
++/**
++ * Loads thermal subdataset.
++ */
++GDALDataset* FASTV6ImageDataset::LoadThermal(
++    GDALOpenInfo* poOpenInfo, CPLHastTableH hMtl) {
++
++    GDALDataset* pahDSs[2] = { NULL };
++    
++    // Get directory where files are.
++    char** papszSD = CSLTokenizeString2(poOpenInfo->pszFilename, ":",
++        CSLT_HONOURSTRINGS);
++    char* pszDirName = CPLStrdup(CPLGetDirname(papszSD[1]));
++    
++    // Get scene ID to compose the dataset name.
++    char* pzsSceneId = (char*)GetValue(hMtl, "METADATA_FILE_INFO",
++                                             "LANDSAT_SCENE_ID");
++
++    // Get size.
++    int nXSize = 0, nYSize = 0;
++    int bFoundSDSize = FASTV6ImageDataset::GetSubdatasetSize(hMtl,
++        "thermal", nXSize, nYSize);
++    if (bFoundSDSize == FALSE)
++        return NULL;
++
++    // Set dataset info from the first band tif.    
++    GDALDataset* poSrcDS = GetStAvailableThermalBand(poOpenInfo, hMtl);
++    if (poSrcDS == NULL)
++        return NULL;
++
++    // Create a virtual dataset.
++    VRTDataset* poVrtDS = (VRTDataset*)VRTCreate(nXSize, nYSize);
++    char szTempFN[BUFFER_SIZE_HUGE] = { 0 };
++    sprintf(szTempFN, "%s/%s (thermal).vrt", GetTempDir_(), pzsSceneId);
++    poVrtDS->SetDescription(szTempFN);
++
++    // Copy common dataset info.
++    CopyDatasetInfo(poVrtDS, poSrcDS);
++    GDALClose(poSrcDS);    
++
++    // Set bands 10 and 11.
++    for (int iIndex = 9; iIndex < 11; ++iIndex) {
++        int nSrcBand = iIndex + 1;        
++        char szFilename[BUFFER_SIZE_HUGE] = { 0 };
++
++        sprintf(szFilename, "FILE_NAME_BAND_%d", nSrcBand);
++        char* pzsThermalBand = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++            szFilename);
++
++        if (pzsThermalBand != NULL) {
++            char szSrcFilename[BUFFER_SIZE_HUGE] = { 0 };
++            sprintf(szSrcFilename, "%s%s%s", pszDirName, "/", pzsThermalBand);
++
++            GDALDataset* poBandDS = (GDALDataset*)GDALOpen(szSrcFilename,
++                GA_ReadOnly);
++
++            VRTSourcedRasterBand* pvirtband = NULL;
++            GDALRasterBand* psrcband = NULL;
++
++            psrcband = poBandDS->GetRasterBand(1);
++
++            poVrtDS->AddBand(psrcband->GetRasterDataType(), NULL);
++            pvirtband = (VRTSourcedRasterBand*) poVrtDS->GetRasterBand(
++                poVrtDS->GetRasterCount());
++
++            pvirtband->AddSimpleSource(psrcband, 0, 0,
++                poBandDS->GetRasterXSize(), poBandDS->GetRasterYSize(),
++                0, 0, nXSize, nYSize);
++
++            pvirtband->CopyCommonInfoFrom(psrcband);
++        
++            pahDSs[poVrtDS->GetRasterCount() - 1] = poBandDS;
++        }    
++    }    
++    
++    // Free resources and cleanup.
++    GDALClose(poVrtDS);
++
++    CPLFree(pszDirName);
++    CSLDestroy(papszSD);
++
++    for (int iIndex = 0; iIndex < 2; ++iIndex)
++        if (pahDSs[iIndex] != NULL)
++            GDALClose(pahDSs[iIndex]);
++    
++    CPLCleanupTLS();
++
++    //
++    return (GDALDataset*)GDALOpen(szTempFN, GA_ReadOnly);
++}
++
++/**
++ * Loads quality subdataset.
++ */
++GDALDataset* FASTV6ImageDataset::LoadQuality(
++    GDALOpenInfo* poOpenInfo, CPLHastTableH hMtl) {
++
++    char** papszSD = CSLTokenizeString2(poOpenInfo->pszFilename, ":",
++        CSLT_HONOURSTRINGS);
++    char* pszDirName = CPLStrdup(CPLGetDirname(papszSD[1]));
++    char* pzsQtyBand = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++                                             "FILE_NAME_BAND_QUALITY");
++    if (pzsQtyBand == NULL)
++        return NULL;
++
++    char szSrcFilename[BUFFER_SIZE_HUGE] = { 0 };
++    sprintf(szSrcFilename, "%s%s%s", pszDirName, "/", pzsQtyBand);
++
++    CPLFree(pszDirName);
++    CSLDestroy(papszSD);
++
++    return (GDALDataset*)GDALOpen(szSrcFilename, GA_ReadOnly);
++}
++
++/**
++ * Gets first reflective band available.
++ */
++GDALDataset* FASTV6ImageDataset::GetStAvailableReflectiveBand(
++    GDALOpenInfo* poOpenInfo, CPLHastTableH hMtl) {
++
++    bool bFound = false;
++
++    char** papszSD = CSLTokenizeString2(poOpenInfo->pszFilename, ":",
++        CSLT_HONOURSTRINGS);
++    char* pszDirName = CPLStrdup(CPLGetDirname(papszSD[1]));
++
++    // Search bands from 1 to 7.
++    GDALDataset* poDS = NULL;  
++    for (int iIndex = 0; iIndex < 7 && !bFound; ++iIndex) {
++        int nSrcBand = iIndex + 1;
++        char szFilename[BUFFER_SIZE_HUGE] = { 0 };
++
++        sprintf(szFilename, "FILE_NAME_BAND_%d", nSrcBand);
++        char* pzsReflBand = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++            szFilename);
++
++        if (pzsReflBand != NULL) {
++            char szSrcFilename[BUFFER_SIZE_HUGE] = { 0 };
++            sprintf(szSrcFilename, "%s%s%s", pszDirName, "/", pzsReflBand);
++            poDS = (GDALDataset*)GDALOpen(szSrcFilename, GA_ReadOnly);
++            bFound = true;
++        }
++    }
++
++    // If not found try with band 9.
++    if (!bFound) {
++        char* pzsReflBand = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++                                                  "FILE_NAME_BAND_9");
++        if (pzsReflBand != NULL) {
++            char szSrcFilename[BUFFER_SIZE_HUGE] = { 0 };
++            sprintf(szSrcFilename, "%s%s%s", pszDirName, "/", pzsReflBand);
++            poDS = (GDALDataset*)GDALOpen(szSrcFilename, GA_ReadOnly);
++        }
++    }
++
++    CPLFree(pszDirName);
++    CSLDestroy(papszSD);
++
++    return poDS;
++}
++
++/**
++ * Gets first thermal band available.
++ */
++GDALDataset* FASTV6ImageDataset::GetStAvailableThermalBand(
++    GDALOpenInfo* poOpenInfo, CPLHastTableH hMtl) {
++
++    bool bFound = false;
++
++    char** papszSD = CSLTokenizeString2(poOpenInfo->pszFilename, ":",
++        CSLT_HONOURSTRINGS);
++    char* pszDirName = CPLStrdup(CPLGetDirname(papszSD[1]));
++
++    // Search 10 and 11.
++    GDALDataset* poDS = NULL;  
++    for (int iIndex = 9; iIndex < 11 && !bFound; ++iIndex) {
++        int nSrcBand = iIndex + 1;
++        char szFilename[BUFFER_SIZE_HUGE] = { 0 };
++
++        sprintf(szFilename, "FILE_NAME_BAND_%d", nSrcBand);
++        char* pzsThermalBand = (char*)GetValue(hMtl, "PRODUCT_METADATA",
++            szFilename);
++
++        if (pzsThermalBand != NULL) {
++            char szSrcFilename[BUFFER_SIZE_HUGE] = { 0 };
++            sprintf(szSrcFilename, "%s%s%s", pszDirName, "/", pzsThermalBand);
++            poDS = (GDALDataset*)GDALOpen(szSrcFilename, GA_ReadOnly);
++            bFound = true;
++        }
++    }
++
++    CPLFree(pszDirName);
++    CSLDestroy(papszSD);
++
++    return poDS;
++}
++
++/**
++ * Copies dataset's information.
++ */
++void FASTV6ImageDataset::CopyDatasetInfo(GDALDataset* poDestDS,
++    GDALDataset* poSrcDS) {    
++    const char* pszProjection = poSrcDS->GetProjectionRef();
++    if (pszProjection != NULL && strlen(pszProjection) > 0)
++        poDestDS->SetProjection(pszProjection);
++
++    double adfGeoTransform[6] = { 0 };
++    poSrcDS->GetGeoTransform(adfGeoTransform);
++    poDestDS->SetGeoTransform(adfGeoTransform);
++
++    char** ppmetadata = CSLDuplicate(poSrcDS->GetMetadata());
++    poDestDS->SetMetadata(ppmetadata);
++    CSLDestroy(ppmetadata);
++
++    const char* pinterleave = poSrcDS->GetMetadataItem("INTERLEAVE",
++                                                       "IMAGE_STRUCTURE");
++    if (pinterleave)
++        poDestDS->SetMetadataItem("INTERLEAVE", pinterleave,
++            "IMAGE_STRUCTURE");
++
++    // Mantengo datos espaciales.
++    char** ppmd = poSrcDS->GetMetadata("RPC");
++    if (ppmd != NULL)
++        poDestDS->SetMetadata(ppmd, "RPC");
++
++    ppmd = poSrcDS->GetMetadata("GEOLOCATION");
++    if (ppmd != NULL)
++        poDestDS->SetMetadata(ppmd, "GEOLOCATION");
++}
++
++/**
++ * Register driver.
++ */
++void GDALRegister_FASTV6Image() {
++    if (!GDAL_CHECK_VERSION(FASTV6_IMAGE_FORMAT_DESC))
++        return;
++
++    if (GDALGetDriverByName(FASTV6_IMAGE_FORMAT_DESC) == NULL)
++    {
++        GDALDriver* poDriver = new GDALDriver();
++        
++        poDriver->SetDescription(FASTV6_IMAGE_FORMAT_DESC);
++        poDriver->SetMetadataItem(GDAL_DMD_LONGNAME,
++                                  FASTV6_IMAGE_FORMAT_LONGNAME);
++        poDriver->SetMetadataItem(GDAL_DMD_HELPTOPIC, "frmt_fastv6.html" );
++
++        poDriver->pfnOpen = FASTV6ImageDataset::Open;
++        poDriver->pfnIdentify = FASTV6ImageDataset::Identify;
++
++        GetGDALDriverManager()->RegisterDriver(poDriver);
++    }
++}
+diff -rupN gdal-1.11.0/frmts/fastv6/frmt_fastv6.html gdal-1.11.0_MOD/frmts/fastv6/frmt_fastv6.html
+--- gdal-1.11.0/frmts/fastv6/frmt_fastv6.html	1969-12-31 21:00:00.000000000 -0300
++++ gdal-1.11.0_MOD/frmts/fastv6/frmt_fastv6.html	2014-06-02 15:02:51.000000000 -0300
+@@ -0,0 +1,170 @@
++<html>
++<head>
++<title>FAST v6 --- New Landsat-8 metadata format (MTL file)</title>
++</head>
++
++<body bgcolor="#ffffff">
++
++<h1>FAST v6 --- New Landsat-8 metadata format (MTL file)</h1>
++
++<p>
++This driver is intended for importing MTL metadata files.
++This driver can import MTL files (Level 1 Metadata)
++</p>
++
++<h2>Multiple Image Handling (Subdatasets)</h2>
++
++<p>
++The MTL file contains all the info about the different bands which conform
++the different subdatasets.
++</p>
++
++<p>
++The first step is to get a report of the available components images (arrays) 
++using <b>gdalinfo</b>, and then to import the desired images using
++<b>gdal_translate</b>.
++</p>
++
++</p>
++The <b>gdalinfo</b> utility lists all multidimensional subdatasets from the 
++input MTL file based on the available bands. The name of individual images
++(subdatasets) are assigned to the <b>SUBDATASET_n_NAME</b> metadata item.
++The description for each image is found in the <b>SUBDATASET_n_DESC</b>
++metadata item. Subdataset names will be formatted like this:
++</p>
++
++<p>
++<i>FASTV6:file_name:subdataset</i>
++</p>
++
++<p>
++where:<br />
++<i>file_name</i> is the name of the input file, and<br />
++<i>subdataset</i> is the dataset name of the array to use (for internal use in 
++GDAL).
++</p>
++
++<p>
++On the second step you should provide this name for <b>gdalinfo</b> or
++<b>gdal_translate</b> for actual reading of the data.
++</p>
++
++<p>
++For example, we want to read data from the OLI Reflective dataset:
++</p>
++<pre>
++$ gdalinfo LC82300942013289LGN00_MTL.txt
++Driver: FASTV6/FAST v6 format (_MTL.txt)
++Files: LC82300942013289LGN00_MTL.txt
++Size is 512, 512
++Coordinate System is `'
++Subdatasets:
++  SUBDATASET_1_NAME=FASTV6:"LC82300942013289LGN00_MTL.txt":panchromatic
++  SUBDATASET_1_DESC=LC82300942013289LGN00 (Panchromatic)
++  SUBDATASET_2_NAME=FASTV6:"LC82300942013289LGN00_MTL.txt":reflective
++  SUBDATASET_2_DESC=LC82300942013289LGN00 (Reflective)
++  SUBDATASET_3_NAME=FASTV6:"LC82300942013289LGN00_MTL.txt":thermal
++  SUBDATASET_3_DESC=LC82300942013289LGN00 (Thermal)
++  SUBDATASET_4_NAME=FASTV6:"LC82300942013289LGN00_MTL.txt":quality
++  SUBDATASET_4_DESC=LC82300942013289LGN00 (Quality)
++Corner Coordinates:
++Upper Left  (    0.0,    0.0)
++Lower Left  (    0.0,  512.0)
++Upper Right (  512.0,    0.0)
++Lower Right (  512.0,  512.0)
++Center      (  256.0,  256.0)
++</pre>
++
++<p>
++Now select the subdataset described as
++<tt>LC82300942013289LGN00 (Reflective)</tt>:
++</p>
++<pre>
++$ gdalinfo FASTV6:"LC82300942013289LGN00_MTL.txt":reflective 
++Driver: VRT/Virtual Raster
++Files: ./LC82300942013289LGN00 (reflective).vrt
++       /././LC82300942013289LGN00_B1.TIF
++       /././LC82300942013289LGN00_B2.TIF
++       /././LC82300942013289LGN00_B3.TIF
++       /././LC82300942013289LGN00_B4.TIF
++       /././LC82300942013289LGN00_B5.TIF
++       /././LC82300942013289LGN00_B6.TIF
++       /././LC82300942013289LGN00_B7.TIF
++       /././LC82300942013289LGN00_B9.TIF
++Size is 7831, 7841
++Coordinate System is:
++PROJCS["WGS 84 / UTM zone 19N",
++    GEOGCS["WGS 84",
++        DATUM["WGS_1984",
++            SPHEROID["WGS 84",6378137,298.257223563,
++                AUTHORITY["EPSG","7030"]],
++            AUTHORITY["EPSG","6326"]],
++        PRIMEM["Greenwich",0],
++        UNIT["degree",0.0174532925199433],
++        AUTHORITY["EPSG","4326"]],
++    PROJECTION["Transverse_Mercator"],
++    PARAMETER["latitude_of_origin",0],
++    PARAMETER["central_meridian",-69],
++    PARAMETER["scale_factor",0.9996],
++    PARAMETER["false_easting",500000],
++    PARAMETER["false_northing",0],
++    UNIT["metre",1,
++        AUTHORITY["EPSG","9001"]],
++    AUTHORITY["EPSG","32619"]]
++Origin = (219285.000000000000000,-5297685.000000000000000)
++Pixel Size = (30.000000000000000,-30.000000000000000)
++Metadata:
++  AREA_OR_POINT=Point
++Image Structure Metadata:
++  INTERLEAVE=BAND
++Corner Coordinates:
++Upper Left  (  219285.000,-5297685.000) ( 72d44'48.81"W, 47d46'16.75"S)
++Lower Left  (  219285.000,-5532915.000) ( 72d54'28.60"W, 49d52'57.72"S)
++Upper Right (  454215.000,-5297685.000) ( 69d36'42.41"W, 47d49'51.18"S)
++Lower Right (  454215.000,-5532915.000) ( 69d38'17.36"W, 49d56'48.61"S)
++Center      (  336750.000,-5415300.000) ( 71d13'34.30"W, 48d52' 8.96"S)
++Band 1 Block=128x128 Type=UInt16, ColorInterp=Gray
++Band 2 Block=128x128 Type=UInt16, ColorInterp=Gray
++Band 3 Block=128x128 Type=UInt16, ColorInterp=Gray
++Band 4 Block=128x128 Type=UInt16, ColorInterp=Gray
++Band 5 Block=128x128 Type=UInt16, ColorInterp=Gray
++Band 6 Block=128x128 Type=UInt16, ColorInterp=Gray
++Band 7 Block=128x128 Type=UInt16, ColorInterp=Gray
++Band 8 Block=128x128 Type=UInt16, ColorInterp=Gray
++</pre>
++
++<p>
++You may use <b>gdal_translate</b> for reading image bands from this
++dataset.
++</p>
++<pre>
++$ gdal_translate FASTV6:"LC82300942013289LGN00_MTL.txt":reflective B432.tif -b 4 -b 3 -b 2
++</pre>
++<p>
++Note that you should provide exactly the contents of the line marked 
++<b>SUBDATASET_n_NAME</b> to GDAL, including the <b>FASTV6:</b> prefix.
++</p>
++
++<h2>Driver building</h2>
++<p>
++This driver makes use of the VRT driver which allows a virtual GDAL dataset to
++be composed from other GDAL datasets.
++</p>
++
++<h2>See Also:</h2>
++
++<ul>
++<li>Implemented as <tt>gdal/frmts/fastv6/fastv6dataset.cpp</tt>
++and <tt>gdal/frmts/fastv6/fastv6imagedataset.cpp</tt>
++</li>
++
++<li>
++<a href="http://landsat.usgs.gov/documents/LDCM-DFCB-004.pdf">LANDSAT DATA CONTINUITY MISSION (LDCM) LEVEL 1 (L1) DATA FORMAT CONTROL BOOK (DFCB)</a>
++at 
++<a href="http://landsat.usgs.gov/">U.S. Geological Survey</a>
++</li> 
++
++</ul>
++
++</body>
++</html>
+diff -rupN gdal-1.11.0/frmts/fastv6/GNUmakefile gdal-1.11.0_MOD/frmts/fastv6/GNUmakefile
+--- gdal-1.11.0/frmts/fastv6/GNUmakefile	1969-12-31 21:00:00.000000000 -0300
++++ gdal-1.11.0_MOD/frmts/fastv6/GNUmakefile	2014-06-02 15:02:51.000000000 -0300
+@@ -0,0 +1,13 @@
++
++include ../../GDALmake.opt
++
++OBJ	=	fastv6dataset.o fastv6imagedataset.o fastv6common.o
++
++CPPFLAGS	:=	$(GDAL_INCLUDE) $(CPPFLAGS)
++
++default:	$(OBJ:.o=.$(OBJ_EXT))
++
++clean:
++	rm -f *.o
++
++install-obj:	$(O_OBJ:.o=.$(OBJ_EXT))
+diff -rupN gdal-1.11.0/frmts/fastv6/makefile.vc gdal-1.11.0_MOD/frmts/fastv6/makefile.vc
+--- gdal-1.11.0/frmts/fastv6/makefile.vc	1969-12-31 21:00:00.000000000 -0300
++++ gdal-1.11.0_MOD/frmts/fastv6/makefile.vc	2014-06-02 15:02:51.000000000 -0300
+@@ -0,0 +1,14 @@
++
++OBJ	=	fastv6dataset.obj fastv6imagedataset.obj fastv6common.obj
++
++EXTRAFLAGS = 	-I..\iso8211
++
++GDAL_ROOT	=	..\..
++
++!INCLUDE $(GDAL_ROOT)\nmake.opt
++
++default:	$(OBJ)
++	xcopy /D  /Y *.obj ..\o
++
++clean:
++	-del *.obj
+diff -rupN gdal-1.11.0/frmts/formats_list.html gdal-1.11.0_MOD/frmts/formats_list.html
+--- gdal-1.11.0/frmts/formats_list.html	2014-04-16 17:04:48.000000000 -0300
++++ gdal-1.11.0_MOD/frmts/formats_list.html	2014-07-18 16:51:14.116331694 -0300
+@@ -1083,6 +1083,14 @@
+ </td><td> Yes
+ </td></tr>
+ 
++<tr><td> <a href="frmt_fastv6.html">FAST v6</a>
++</td><td> FASTV6
++</td><td> No
++</td><td> No
++</td><td> --
++</td><td> Yes
++</td></tr>
++
+ </table>
+ 
+ <p>
+diff -rupN gdal-1.11.0/frmts/gdalallregister.cpp gdal-1.11.0_MOD/frmts/gdalallregister.cpp
+--- gdal-1.11.0/frmts/gdalallregister.cpp	2014-07-18 16:41:09.000000000 -0300
++++ gdal-1.11.0_MOD/frmts/gdalallregister.cpp	2014-07-18 16:54:51.600322480 -0300
+@@ -533,6 +533,12 @@ void CPL_STDCALL GDALAllRegister()
+ #ifdef FRMT_iris
+     GDALRegister_IRIS();
+ #endif
++
++#ifdef FRMT_fastv6
++    GDALRegister_FASTV6();
++    GDALRegister_FASTV6Image();
++#endif
++
+ /* -------------------------------------------------------------------- */
+ /*      Deregister any drivers explicitly marked as supressed by the    */
+ /*      GDAL_SKIP environment variable.                                 */
+diff -rupN gdal-1.11.0/gcore/gdal_frmts.h gdal-1.11.0_MOD/gcore/gdal_frmts.h
+--- gdal-1.11.0/gcore/gdal_frmts.h	2014-07-18 16:41:10.000000000 -0300
++++ gdal-1.11.0_MOD/gcore/gdal_frmts.h	2014-07-18 16:55:36.840320563 -0300
+@@ -180,6 +180,8 @@ void CPL_DLL GDALRegister_MBTiles(void);
+ void CPL_DLL GDALRegister_ARG(void);
+ void CPL_DLL GDALRegister_IRIS(void);
+ void CPL_DLL GDALRegister_KRO(void);
++void CPL_DLL GDALRegister_FASTV6(void);
++void CPL_DLL GDALRegister_FASTV6Image(void);
+ CPL_C_END
+ 
+ #endif /* ndef GDAL_FRMTS_H_INCLUDED */
+diff -rupN gdal-1.11.0/GDALmake.opt.in gdal-1.11.0_MOD/GDALmake.opt.in
+--- gdal-1.11.0/GDALmake.opt.in	2014-07-18 16:41:09.000000000 -0300
++++ gdal-1.11.0_MOD/GDALmake.opt.in	2014-07-18 16:58:00.020314496 -0300
+@@ -481,6 +481,7 @@ GDAL_FORMATS = 	gxf gtiff hfa aigrid aai
+ 		idrisi gsg ingr ers jaxapalsar dimap gff cosar pds adrg \
+ 		coasp tsx terragen blx msgn til r northwood saga xyz hf2 \
+ 		kmlsuperoverlay ozi ctg e00grid zmap ngsgeoid iris map prism \
++      fastv6 \
+ 		@OPT_GDAL_FORMATS@
+ 
+ 
+diff -rupN gdal-1.11.0/port/cpl_hash_table.cpp gdal-1.11.0_MOD/port/cpl_hash_table.cpp
+--- gdal-1.11.0/port/cpl_hash_table.cpp	1969-12-31 21:00:00.000000000 -0300
++++ gdal-1.11.0_MOD/port/cpl_hash_table.cpp	2014-06-02 15:02:51.000000000 -0300
+@@ -0,0 +1,214 @@
++/*****************************************************************************
++ *
++ * Name:     cpl_hash_table.cpp
++ * Project:  CPL - Common Portability Library
++ * Purpose:  Hash table implementation.
++ * Author:   Daniel Testa, danieltesta@suremptec.com.ar
++ *
++ *****************************************************************************
++ * Copyright (c) 2014, SUR Emprendimientos Tecnologicos S.R.L.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included
++ * in all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ ****************************************************************************/
++
++#include "cpl_hash_table.h"
++
++/*****************************
++ * Internal data structures. *
++ *****************************/ 
++typedef struct slot_t_ {
++    char* pszKey;
++    void* pValue;
++
++    struct slot_t_* pNext_;
++} SLOT;
++
++typedef struct slot_container_t_ {
++    int nCapacity_;
++    int nKeysCount_;
++
++    SLOT** ppoSlot_;
++} SLOTCONTAINER;
++
++/******************************
++ * Hashing algorithms tested. *
++ ******************************/ 
++static unsigned long djb2_(const char* pszStr) {
++    unsigned long nHash = 5381;
++
++    while (*pszStr++)
++        nHash = ((nHash << 5) + nHash) + *pszStr;
++
++    return nHash;
++}
++
++static unsigned long sdbm_(const char* pszStr) {
++    unsigned long nHash = 0;
++
++    while (*pszStr++)
++        nHash = *pszStr + (nHash << 6) + (nHash << 16) - nHash;
++
++    return nHash;
++}
++
++/**
++ * Returns a hash code for pszStr. The algorithm selected
++ * is the one used in the SDBM Project.
++ */
++static unsigned long CPLHash_(const char* pszStr) {
++    return sdbm_(pszStr);
++}
++
++/**
++ * Initializes a hashtable with the specified initial capacity.
++ */ 
++CPLHastTableH CPLHashTableInit(int nCapacity) {
++    SLOTCONTAINER* pSlotCtr =
++        (SLOTCONTAINER*)CPLCalloc(sizeof(SLOTCONTAINER),
++            sizeof(SLOTCONTAINER));
++
++    pSlotCtr->ppoSlot_ = (SLOT**)CPLCalloc(sizeof(SLOT*) * (nCapacity + 1),
++        sizeof(SLOT*));
++    
++    pSlotCtr->nCapacity_ = nCapacity;
++    pSlotCtr->nKeysCount_ = 0;
++
++    return pSlotCtr;
++}
++
++/**
++ * Associates the specified pszKey to the specified pValue in the
++ * ppHt hashtable.
++ */ 
++void* CPLHashTablePut(CPLHastTableH ppHt, const char* pszKey, void* pValue) {
++    SLOTCONTAINER* pSlotCtr = (SLOTCONTAINER*)ppHt;
++    SLOT** ppSlot = pSlotCtr->ppoSlot_;
++
++    // Makes sure the key is not already in the hashtable.
++    for (int iIndex = 0; iIndex < pSlotCtr->nCapacity_; ++iIndex) {
++        SLOT* pAux = ppSlot[iIndex];
++        while (pAux != NULL && strcmp(pAux->pszKey, pszKey) != 0) {
++            pAux = pAux->pNext_;
++        }
++        if (pAux != NULL) {
++            void* pOldValue = pAux->pValue;
++            pAux->pValue = pValue;
++            return pOldValue;
++        }
++    }
++
++    // It is a new key.
++    SLOT* pNewSlot = (SLOT*)CPLCalloc(sizeof(SLOT), sizeof(SLOT));
++
++    int nIndex = CPLHash_(pszKey) % pSlotCtr->nCapacity_;
++
++    pNewSlot->pszKey = CPLStrdup(pszKey);
++    pNewSlot->pValue = pValue;
++    pNewSlot->pNext_ = NULL;
++    
++    if (ppSlot[nIndex] == NULL) {
++        ppSlot[nIndex] = pNewSlot;
++    } else {
++        SLOT* pAux = ppSlot[nIndex];
++        while (pAux->pNext_ != NULL)
++            pAux = pAux->pNext_;
++        pAux->pNext_ = pNewSlot;
++    }
++
++    ++(pSlotCtr->nKeysCount_);
++    return NULL;
++}
++
++/**
++ * Returns the value to which the specified pszKey is associated,
++ * or NULL if pszKey has no associated value.
++ */
++void* CPLHashTableGet(CPLHastTableH ppHt, const char* pszKey) {
++    SLOTCONTAINER* pSlotCtr = (SLOTCONTAINER*)ppHt;
++    SLOT** ppSlot = pSlotCtr->ppoSlot_;
++
++    int nIndex = CPLHash_(pszKey) % pSlotCtr->nCapacity_;
++    
++    if (ppSlot[nIndex] == NULL) {
++        return NULL;
++    } else {
++        SLOT* pAux = ppSlot[nIndex];
++        while (pAux != NULL && strcmp(pszKey, pAux->pszKey) != 0)
++            pAux = pAux->pNext_;
++        return (pAux != NULL) ? pAux->pValue : NULL;
++    }
++    return NULL;
++}
++
++/**
++ * Free the resources allocated for the hashtable.
++ */
++void* CPLHashTableFree(CPLHastTableH ppHt) {
++    SLOTCONTAINER* pSlotCtr = (SLOTCONTAINER*)ppHt;
++    SLOT** ppSlot = pSlotCtr->ppoSlot_;
++    
++    int nIndex = 0;
++    int nCount = pSlotCtr->nCapacity_;
++    for ( ; nIndex < nCount; ++nIndex) {    
++        SLOT* pNext = NULL;
++        SLOT* pToDel = ppSlot[nIndex];
++        while (pToDel != NULL) {
++            pNext = pToDel->pNext_;
++            CPLFree(pToDel);
++            pToDel = pNext;
++        }
++        ppSlot[nIndex] = NULL;        
++    }
++    CPLFree(ppSlot);
++    CPLFree(pSlotCtr);
++
++    return NULL;
++}
++
++/**
++ * Returns a array with all the keys in ppHt hashtable.
++ */
++char** CPLHashTableKeysGet(CPLHastTableH ppHt) {
++    SLOTCONTAINER* pSlotCtr = (SLOTCONTAINER*)ppHt;
++    SLOT** ppSlot = pSlotCtr->ppoSlot_;
++
++    int nKeyIndex = 0;
++    char** papszKeys = (char**)CPLCalloc(sizeof(char*) *
++        (pSlotCtr->nKeysCount_ + 1), sizeof(char*));
++    
++    int nIndex = 0;
++    int nCount = pSlotCtr->nCapacity_;
++    for ( ; nIndex < nCount; ++nIndex) {    
++        SLOT* pAux = ppSlot[nIndex];
++        while (pAux != NULL) {         
++            papszKeys[nKeyIndex++] = pAux->pszKey;
++            pAux = pAux->pNext_;
++        }   
++    }
++
++    return papszKeys;
++}
++
++/**
++ * Free the resources allocated for the array of keys.
++ */
++char** CPLHashTableKeysFree(char** papszKeys) {
++    CPLFree(papszKeys);
++    return NULL;
++}
+diff -rupN gdal-1.11.0/port/cpl_hash_table.h gdal-1.11.0_MOD/port/cpl_hash_table.h
+--- gdal-1.11.0/port/cpl_hash_table.h	1969-12-31 21:00:00.000000000 -0300
++++ gdal-1.11.0_MOD/port/cpl_hash_table.h	2014-06-02 15:02:51.000000000 -0300
+@@ -0,0 +1,74 @@
++/*****************************************************************************
++ *
++ * Name:     cpl_hash_table.h
++ * Project:  CPL - Common Portability Library
++ * Purpose:  Hash table implementation.
++ * Author:   Daniel Testa, danieltesta@suremptec.com.ar
++ *
++ *****************************************************************************
++ * Copyright (c) 2014, SUR Emprendimientos Tecnologicos S.R.L.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included
++ * in all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ ****************************************************************************/
++
++#ifndef CPL_HASH_TABLE_H_
++#define CPL_HASH_TABLE_H_
++
++#include "cpl_conv.h"
++
++#define CPLHT_DEFAULT_CAPACITY  11
++
++/**
++ * Hash table handle.
++ */ 
++typedef void* CPLHastTableH;
++
++/**
++ * Initializes a hashtable with the specified initial capacity.
++ */ 
++CPLHastTableH CPLHashTableInit(int nCapacity);
++
++/**
++ * Associates the specified pszKey to the specified pValue in the
++ * ppHt hashtable.
++ */ 
++void* CPLHashTablePut(CPLHastTableH ppHt, const char* pszKey, void* pValue);
++
++/**
++ * Returns the value to which the specified pszKey is associated,
++ * or NULL if pszKey has no associated value.
++ */
++void* CPLHashTableGet(CPLHastTableH ppHt, const char* pszKey);
++
++/**
++ * Free the resources allocated for the hashtable.
++ */
++void* CPLHashTableFree(CPLHastTableH ppHt);
++
++/**
++ * Returns a array with all the keys in ppHt hashtable.
++ */
++char** CPLHashTableKeysGet(CPLHastTableH ppHt);
++
++/**
++ * Free the resources allocated for the array of keys.
++ */
++char** CPLHashTableKeysFree(char** papszKeys);
++
++#endif  // CPL_HASH_TABLE_H_
+diff -rupN gdal-1.11.0/port/GNUmakefile gdal-1.11.0_MOD/port/GNUmakefile
+--- gdal-1.11.0/port/GNUmakefile	2014-04-16 17:04:01.000000000 -0300
++++ gdal-1.11.0_MOD/port/GNUmakefile	2014-07-18 16:56:34.288318131 -0300
+@@ -27,7 +27,7 @@ OBJ =	cpl_conv.o cpl_error.o cpl_string.
+ 	cpl_vsil_tar.o cpl_vsil_stdin.o cpl_vsil_buffered_reader.o \
+ 	cpl_base64.o cpl_vsil_curl.o cpl_vsil_curl_streaming.o \
+ 	cpl_vsil_cache.o cpl_xml_validate.o cpl_spawn.o \
+-	cpl_google_oauth2.o cpl_progress.o cpl_virtualmem.o
++	cpl_google_oauth2.o cpl_progress.o cpl_virtualmem.o cpl_hash_table.o
+ 
+ ifeq ($(ODBC_SETTING),yes)
+ OBJ	:= 	$(OBJ) cpl_odbc.o
+diff -rupN gdal-1.11.0/port/makefile.vc gdal-1.11.0_MOD/port/makefile.vc
+--- gdal-1.11.0/port/makefile.vc	2014-04-16 17:04:01.000000000 -0300
++++ gdal-1.11.0_MOD/port/makefile.vc	2014-07-18 16:57:07.928316706 -0300
+@@ -49,6 +49,7 @@ OBJ	=	cpl_conv.obj \
+ 		cpl_google_oauth2.obj \
+ 		cpl_progress.obj \
+ 		cpl_virtualmem.obj \
++		cpl_hash_table.obj \
+ 		$(ODBC_OBJ)
+ 
+ LIB	=	cpl.lib

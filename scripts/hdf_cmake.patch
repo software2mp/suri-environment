@@ -1,0 +1,11 @@
+--- CMakeLists.txt	2011-02-14 13:23:44 -0300
++++ CMakeLists.txt	2011-04-07 15:20:49 -0300
+@@ -73,7 +73,7 @@
+ #-----------------------------------------------------------------------------
+ # Set the core names of all the libraries
+ #-----------------------------------------------------------------------------
+-SET (HDF5_LIB_CORENAME              "hdf5")
++SET (HDF5_LIB_CORENAME              "libhdf5")
+ SET (HDF5_TEST_LIB_CORENAME         "hdf5_test")
+ SET (HDF5_CPP_LIB_CORENAME          "hdf5_cpp")
+ SET (HDF5_HL_LIB_CORENAME           "hdf5_hl")

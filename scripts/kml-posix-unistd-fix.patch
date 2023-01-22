@@ -1,0 +1,10 @@
+--- src/kml/base/file_posix.cc	2014-05-09 11:02:25.326044883 -0300
++++ src/kml/base/file_posix.cc	2009-11-06 17:46:50.000000000 -0300
+@@ -29,6 +29,7 @@
+ #include "kml/base/file.h"
+ #include <stdlib.h>
+ #include <string.h>
++#include <unistd.h>
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ 
