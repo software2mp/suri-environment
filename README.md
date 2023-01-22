@@ -188,3 +188,11 @@ Extraer todos los paquetes binarios del entorno de Linux:
 cd /home/builder/opt
 for i in $(ls -1 <environment_dir>/bin/*.tar.bz2 | grep -vi MinGW | grep -vi debug) ; do tar -jxvf $i ;done
 ```
+## Docker
+
+La imagen de docker que se construye a partir del `Dockerfile` presente en el repositorio genera un entorno apropiado para compilar aplicaciones derivadas de surilib.
+
+```shell
+$ docker build -t spacesur/surilib-environment:2.0.0 .
+$ docker push spacesur/surilib-environment:2.0.0
+```
