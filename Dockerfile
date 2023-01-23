@@ -109,9 +109,9 @@ RUN cd $HOME/opt/local/bin ; ./wx-config-change-prefix.sh "\/home\/builder\/opt\
 # to eliminate problems when trying to determine if it is version-tracked (when hosted on SVN)
 RUN echo '#!/bin/bash\n\
 \n\
-echo -n "300"\n\
+[[ $1 == "-n" ]] && echo -n "26699" || true\n\
 \n\
-[[ "$1" == "-c" ]] && echo "" || true' > /home/builder/opt/local/bin/svnversion && chmod a+x /home/builder/opt/local/bin/svnversion
+[[ "$1" == "-c" ]] && echo "691:21699" || true' > /home/builder/opt/local/bin/svnversion && chmod a+x /home/builder/opt/local/bin/svnversion
 
 # Set environment variables for building
 RUN echo '#!/bin/bash -x\n\
@@ -134,9 +134,9 @@ RUN cd environment/scripts/ ; bash ./build-all.sh
 # to eliminate problems when trying to determine if it is version-tracked (when hosted on SVN)
 RUN echo '#!/bin/bash\n\
 \n\
-echo -n "300"\n\
+[[ $1 == "-n" ]] && echo -n "26699" || true\n\
 \n\
-[[ "$1" == "-c" ]] && echo "" || true' > /home/builder/opt/local/bin/svnversion && chmod a+x /home/builder/opt/local/bin/svnversion
+[[ "$1" == "-c" ]] && echo "691:21699" || true' > /home/builder/opt/local/bin/svnversion && chmod a+x /home/builder/opt/local/bin/svnversion
 RUN mv /home/builder/environment/bin /home/builder/environment/bin.built
 RUN mv /home/builder/environment/bin.orig /home/builder/environment/bin
 RUN rm -rf /home/builder/opt
