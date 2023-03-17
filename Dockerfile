@@ -37,6 +37,7 @@ RUN apt-get update && \
         cccc \
         xauth \
         dos2unix \
+        tofrodos \
         unzip \
         libglw1-mesa \
         libglw1-mesa-dev \
