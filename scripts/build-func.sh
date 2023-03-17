@@ -342,7 +342,7 @@ install_makepackage() {
 	FORCED_FILES=`echo "$FORCED_FILES" | sed -e 's/^[[:space:]]*//g' -e 's/[[:space:]]*\$//g'`
 	postmessage "Bibliotecas a copiar ${FORCED_FILES}"
 	declare -a copied_files
-	# archivos que debo remover de prefix-pre que exist�an y que se consideren instalados
+	# archivos que debo remover de prefix-pre que existían y que se consideren instalados
 	# por este paquete
 	declare -a files_to_remove_from_prefix_pre_after_install
 	# Archivos que debo copiar a prefix luego de instalar para que se consideren instalados
@@ -375,7 +375,7 @@ install_makepackage() {
 			PRE_FILE="$PREFIX-pre-$1/$file"
 
 			# Si el origen y el destino son los mismos, debo eliminar el archivo de prefix_pre
-			# despu�s de crear prefix pre (o despues de instalar)
+			# después de crear prefix pre (o despues de instalar)
 			if [[ `echo "$TARGET_FILE"` == `echo "$SOURCE_FILE"` ]] ; then
 				postmessage "Archivos origen y destino iguales"
 				files_to_remove_from_prefix_pre_after_install+=("$PRE_FILE")
@@ -384,8 +384,8 @@ install_makepackage() {
 			fi
 		
 			# si el origen esta fuera del prefix, hay que copiarlo desde origen antes de crear 
-			# el paquete, instalar o despu�s de copiar pre y luego borrar el archivo destino
-			# despu�s de generado el paquete
+			# el paquete, instalar o después de copiar pre y luego borrar el archivo destino
+			# después de generado el paquete
 			if [ $(find "$PREFIX" -name `basename $file` 2>/dev/null | wc -c) == 0 ] ; then
 				files_to_remove_from_prefix_after_package+=("$TARGET_FILE")
 				postmessage "Archivo $file no existe en $PREFIX. Se copiara."
@@ -394,7 +394,7 @@ install_makepackage() {
 				fi
 				postmessage `cp -vR "$SOURCE_FILE" "$TARGET_FILE_DIR"`
 			else
-				postmessage "Archivo $file preexistente en $PREFIX. Se renovar�."
+				postmessage "Archivo $file preexistente en $PREFIX. Se renovará."
 				files_to_remove_from_prefix_pre_after_install+=("$PRE_FILE")
 				rm -Rf "$PRE_FILE"
 			fi
